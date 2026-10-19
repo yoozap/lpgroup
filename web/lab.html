@@ -58,8 +58,8 @@
   </div>
 </div>
 
-<link rel="modulepreload" href="./vendor/three/build/three.webgpu.js">
-<link rel="modulepreload" href="./vendor/three/build/three.core.js">
+<link rel="modulepreload" href="./vendor/three-min/build/three.webgpu.js">
+<link rel="modulepreload" href="./vendor/three-min/build/three.core.js">
 <!-- three.js is served from this project, not from a CDN. Twenty cross-origin
      requests - a DNS lookup, a TLS handshake and a round trip each, before a
      single byte of the model could be asked for - were about a second of
@@ -70,10 +70,10 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "./vendor/three/build/three.webgpu.js",
-    "three/webgpu": "./vendor/three/build/three.webgpu.js",
-    "three/tsl": "./vendor/three/build/three.tsl.js",
-    "three/addons/": "./vendor/three/examples/jsm/"
+    "three": "./vendor/three-min/build/three.webgpu.js",
+    "three/webgpu": "./vendor/three-min/build/three.webgpu.js",
+    "three/tsl": "./vendor/three-min/build/three.tsl.js",
+    "three/addons/": "./vendor/three-min/examples/jsm/"
   }
 }
 </script>
