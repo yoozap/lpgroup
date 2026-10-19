@@ -13,11 +13,11 @@
  * ===================================================================== */
 
 @font-face{
-  font-family:Jost; src:url(./fonts/Jost.ttf) format('truetype-variations');
+  font-family:Jost; src:url(./fonts/Jost.woff2) format('woff2-variations');
   font-weight:100 900; font-style:normal; font-display:swap;
 }
 @font-face{
-  font-family:'Noto Sans Georgian'; src:url(./fonts/NotoSansGeorgian.ttf) format('truetype-variations');
+  font-family:'Noto Sans Georgian'; src:url(./fonts/NotoSansGeorgian.woff2) format('woff2-variations');
   font-weight:100 900; font-style:normal; font-display:swap;
   unicode-range:U+10A0-10FF,U+1C90-1CBF,U+2D00-2D2F;
 }
@@ -41,7 +41,7 @@
    since the language has no running capitals. See
    web/fonts/BPGNinoMtavruli-LICENCE.txt. */
 @font-face{
-  font-family:'BPG Nino Mtavruli'; src:url(./fonts/BPGNinoMtavruli.otf) format('opentype');
+  font-family:'BPG Nino Mtavruli'; src:url(./fonts/BPGNinoMtavruli.woff2) format('woff2');
   font-weight:400 700; font-style:normal; font-display:swap;
   unicode-range:U+10D0-10FF;
 }
