@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LP Group — the building is ready, your flat is waiting</title>
+<meta name="description" content="A finished residential building by LP Group in Rustavi. Choose a flat online, walk through it in 3D, and get the keys right after purchase.">
+<meta name="theme-color" content="#f9f0e7">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d3559'/%3E%3Cpath d='M8 8v16h7' stroke='%23e5af69' stroke-width='2.6' fill='none' stroke-linecap='square'/%3E%3Cpath d='M18 24V8h4a4 4 0 0 1 0 8h-4' stroke='%23e5af69' stroke-width='2.6' fill='none'/%3E%3C/svg%3E">
+<link rel="preload" href="./fonts/Jost.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="./fonts/NotoSansGeorgian.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="./site.css">
+<link rel="modulepreload" href="./vendor/three/build/three.webgpu.js">
+<link rel="modulepreload" href="./vendor/three/build/three.core.js">
+<!-- three.js is served from this project, not from a CDN. Twenty cross-origin
+     requests - a DNS lookup, a TLS handshake and a round trip each, before a
+     single byte of the model could be asked for - were about a second of
+     every cold boot. The vendored copy is three@0.186.1 with only the module
+     graph this page imports; `web/vendor/three/README.md` says how it was
+     made and how to go back to the CDN. It must be served compressed: it is
+     3.8 MB of unminified JavaScript and about a tenth of that gzipped. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/build/three.webgpu.js",
+    "three/webgpu": "./vendor/three/build/three.webgpu.js",
+    "three/tsl": "./vendor/three/build/three.tsl.js",
+    "three/addons/": "./vendor/three/examples/jsm/"
+  }
+}
+</script>
+
+<!-- The model is 10.9 MB and app.js cannot ask for it until three.js has come
+     down from the CDN and been parsed: about a second in which the only thing
+     on the wire is JavaScript, and then the library sits idle while the model
+     downloads. It is fetched HERE instead, beside the modules, and handed to
+     the loader as an ArrayBuffer - the two travel together on a cold cache.
+     `progress` is what the boot bar reads while it is in flight. If anything
+     about this fails, app.js just loads the model the ordinary way. -->
+<script>
+window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
+	var o = { loaded: 0, total: 0 };
+	var p = fetch( './scene.glb' ).then( async function ( r ) {
+		if ( ! r.ok ) throw new Error( 'scene.glb ' + r.status );
+		o.total = + ( r.headers.get( 'content-length' ) || 0 );
+		if ( ! r.body ) return r.arrayBuffer();
+		var parts = [], rd = r.body.getReader();
+		for ( ;; ) {
+			var step = await rd.read();
+			if ( step.done ) break;
+			parts.push( step.value ); o.loaded += step.value.byteLength;
+		}
+		var all = new Uint8Array( o.loaded ), at = 0;
+		for ( var i = 0; i < parts.length; i ++ ) { all.set( parts[ i ], at ); at += parts[ i ].byteLength; }
+		return all.buffer;
+	} );
+	p.progress = o;
+	return p;
+} )();
+</script>
+</head>
+<body data-embed="1">
+
+<!-- one sprite, used everywhere -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<g id="s" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></g>
+<symbol id="i-school" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10 12 5l9 5"/><path d="M5 11v8h14v-8"/><path d="M10 19v-4h4v4"/></symbol>
+<symbol id="i-kinder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/></symbol>
+<symbol id="i-bus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="12" rx="2.5"/><path d="M4 10h16M8 20v-2M16 20v-2"/><circle cx="8" cy="16" r=".9" fill="currentColor"/><circle cx="16" cy="16" r=".9" fill="currentColor"/></symbol>
+<symbol id="i-cart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h2l2.4 10.4a2 2 0 0 0 2 1.6h6.8a2 2 0 0 0 2-1.5L20 7H6"/><circle cx="10" cy="20" r="1.3"/><circle cx="17" cy="20" r="1.3"/></symbol>
+<symbol id="i-park" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21v-5"/><path d="M12 16c-4 0-6.5-2.3-6.5-5.3C5.5 7 8.4 4 12 4s6.5 3 6.5 6.7c0 3-2.5 5.3-6.5 5.3Z"/></symbol>
+<symbol id="i-clinic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M12 9v7M8.5 12.5h7"/></symbol>
+<symbol id="i-car" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-3l1.8-4.4A2 2 0 0 1 7.7 7h8.6a2 2 0 0 1 1.9 1.6L20 13v3"/><path d="M4 16h16M6.5 16v2M17.5 16v2"/><circle cx="7.8" cy="13" r=".9" fill="currentColor"/><circle cx="16.2" cy="13" r=".9" fill="currentColor"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.4c0 4.3 2.9 7.8 7 9.6 4.1-1.8 7-5.3 7-9.6V6Z"/><path d="m9.3 12 1.9 2 3.5-3.7"/></symbol>
+<symbol id="i-play-yard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V8l8-4 8 4v12"/><path d="M4 13h16M9 20v-7M15 20v-7"/></symbol>
+<symbol id="i-lift" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M12 3v18M9 8.5 10.3 7l1.2 1.5M14.5 15.5 15.8 17 17 15.5"/></symbol>
+<symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5 12 5l8 3.5v7L12 19l-8-3.5Z"/><path d="M4 8.5 12 12l8-3.5M12 12v7"/></symbol>
+<symbol id="i-shop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16l-1 11H5Z"/><path d="M9 9V6.5a3 3 0 0 1 6 0V9"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2.2"/><path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10"/></symbol>
+<symbol id="i-cam" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5h4L8.6 6h6.8L17 8.5h4v11H3Z"/><circle cx="12" cy="13.5" r="3.4"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 5 7 7-7 7"/></symbol>
+<symbol id="i-cube" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7.2v9.6L12 21l8-4.2V7.2Z"/><path d="M4 7.2 12 11.5l8-4.3M12 11.5V21"/></symbol>
+</defs></svg>
+
+<!-- ============================================================ header -->
+<header id="head" class="onhero">
+  <div class="wrap">
+    <a class="logo" href="#top" aria-label="LP Group, home">
+      <span class="mk">LP</span>
+      <span class="wm">LP Group<small data-v="projectLine">Todria 11 · Rustavi</small></span>
+    </a>
+    <nav id="nav" aria-label="Sections">
+      <a href="#about">About</a>
+      <a href="#location">Location</a>
+      <a href="#prices">Prices</a>
+      <a href="#gallery">Gallery</a>
+      <a href="#contacts">Contacts</a>
+    </nav>
+    <a class="tel" data-v="phone" href="#" data-href="tel">+995 591 70 04 00</a>
+    <!-- The language, as the two words themselves rather than a flag: a
+         flag is a country and this is a language, and half the buyers of
+         a Rustavi flat read both. The one that is on is not a button. -->
+    <div class="lang" id="lang" role="group" aria-label="Language">
+      <button type="button" data-lang="ka" lang="ka">ქარ</button>
+      <button type="button" data-lang="en" lang="en">Eng</button>
+    </div>
+    <a class="btn btn--amber btn--sm cta" href="#contacts">Book a viewing</a>
+    <button class="burger" aria-label="Menu" aria-expanded="false"><span></span><span></span><span></span></button>
+  </div>
+</header>
+
+<!-- ============================================================== scene -->
+<!-- app.js owns everything inside #stage: it is the same renderer the
+     render lab (lab.html) runs, sized to the window and sitting behind the
+     document. The hero below is the stretch of page that lets it show. -->
+<div id="stage">
+  <div id="frame"></div>
+</div>
+
+<!-- =============================================================== hero -->
+<main id="top">
+<section id="hero">
+  <div id="boot">
+    <div>
+      <div class="t" id="bootmsg">starting webgpu</div>
+      <div class="b"><i id="bootbar"></i></div>
+      <div class="err" id="booterr"></div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="heroline">
+      <span class="eyebrow"><span class="wide">LP Group · </span><span data-v="project">Todria 11</span> · <span data-v="place">Todria, Rustavi</span></span>
+      <span class="badge">Ready to move in</span>
+    </div>
+    <h1>The building is ready.<br><em>Your flat is waiting.</em></h1>
+    <p class="lead">No waiting and no construction risk. Choose a flat online, walk
+      through it in 3D, and get the keys right after purchase.</p>
+
+    <!-- What is for sale on the storey under the camera. It takes the
+         flat card's place in the floor view: the plate fills the display
+         there, and two cards over it would be two cards too many. -->
+    <div id="typerail" hidden></div>
+
+    <div id="flatcard">
+      <!-- The way back stands at the LEFT END OF THE STEP'S OWN HEAD LINE,
+           beside the badge that names the step, rather than as a button
+           under the card: it is undoing the click that got here, not a
+           third thing to do. The floor view and the open flat carry the
+           same link at the left end of their own head line - see
+           `fillTypeRail` and `fillFlatPanel` in site.js. -->
+      <div class="stephead">
+        <a class="stepback" id="heroback" href="#top">&larr; Back to the street</a>
+        <span class="badge" data-v="tourBadge">The show flat · top floor, corner</span>
+      </div>
+      <h2 data-v="tourTitle">2-bedroom, 77.7 m²</h2>
+      <div class="rowline">
+        <div>Floor<b data-v="tourFloor">12</b></div>
+        <div>Area<b data-v="tourArea">77.7 m²</b></div>
+        <div>Price<b data-v="tourPrice">$72,200</b></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- The floor view's name, written on the TOP CORNER OF THE BUILDING: it
+       is placed against the plate's own left edge and top edge, both of
+       which the scene is given by `tellInset`, so it stands on the storey
+       rather than up in the corner of the page. -->
+  <div id="floorlabel" hidden>Choose flat</div>
+
+  <!-- The floor view is framed to the whole storey at a scale a plan can be
+       read at, which leaves the far end of the row off the right of the
+       window. These two walk it along, a flat at a time. They sit on the
+       RIGHT END OF THE `Choose flat` LINE - `placePager` drops them onto the
+       same line the label is on, against the page's own right gutter, so
+       they come down directly under the header's button and the view's name
+       and its controls read as one line across the top. Floor view only. -->
+  <div class="planpager" id="planpager" hidden>
+    <button class="pgbtn" id="plan-prev" type="button" aria-label="The flats to the left">
+      <svg width="17" height="17" aria-hidden="true"><use href="#i-chev"/></svg>
+    </button>
+    <button class="pgbtn" id="plan-next" type="button" aria-label="The flats to the right">
+      <svg width="17" height="17" aria-hidden="true"><use href="#i-chev"/></svg>
+    </button>
+  </div>
+
+  <!-- What the floor under the pointer is selling. The scene lights the
+       storey; this says what stands on it. -->
+  <div id="floortag" hidden></div>
+
+  <!-- One per flat in the floor view: its area, written in the middle of
+       its own plan. The scene says where each goes (`lp:planbadge`); the
+       badge takes itself off the flat the pointer is furnishing. -->
+  <div id="planbadges" aria-hidden="true"></div>
+
+  <!-- One per ROOM of the open flat, standing on the middle of it. The dot
+       names its room under the pointer and walks the camera into it when it
+       is clicked; the scene says where each one goes (`lp:roomdot`) and the
+       page draws, hovers and hits them. They are buttons, not decoration -
+       a visitor on a keyboard tabs through the rooms of the flat. -->
+  <div id="roomdots" hidden></div>
+
+  <!-- ...and once the camera is standing IN one of them, the way around
+       them and the way out. It sits across the foot of the window, over
+       the room rather than beside it: here the plate is not a plan with a
+       column of cards beside it, it is a photograph of a room. -->
+  <!-- The keys are the one thing about a room a visitor cannot see. It is
+       said ONCE, the first time they are stood in one, and fades off the
+       picture by itself: a line of type that stays on a photograph of a
+       living room is a line of type in the photograph. -->
+  <p id="roomhint" hidden>Drag to look &middot; <b>W A S D</b> to walk &middot; doors open as you come to them</p>
+  <div id="roombar" hidden>
+    <button class="rbtn rbtn--prev" id="room-prev" type="button" aria-label="The room before">
+      <svg width="16" height="16" aria-hidden="true"><use href="#i-chev"/></svg>
+    </button>
+    <b id="room-name">Living room</b>
+    <button class="rbtn" id="room-next" type="button" aria-label="The next room">
+      <svg width="16" height="16" aria-hidden="true"><use href="#i-chev"/></svg>
+    </button>
+    <button class="rout" id="room-out" type="button">Back to the flat</button>
+  </div>
+
+  <!-- The flat filter sits on the fold: the whole inventory is one slider
+       away before the visitor has scrolled anywhere. It drives the same
+       picker further down the page - there is only one set of controls. -->
+  <div id="herofilter">
+    <div class="wrap">
+    <div class="filters">
+      <div class="fld">
+        <span>Rooms</span>
+        <div class="chips" id="f-rooms" role="group" aria-label="Rooms">
+          <button class="chip" data-rooms="any" aria-pressed="true">Any</button>
+          <button class="chip" data-rooms="0" aria-pressed="false">Studio</button>
+          <button class="chip" data-rooms="1" aria-pressed="false">1</button>
+          <button class="chip" data-rooms="2" aria-pressed="false">2</button>
+          <button class="chip" data-rooms="3" aria-pressed="false">3</button>
+        </div>
+      </div>
+      <div class="fld">
+        <span>Floor from</span>
+        <div class="rng"><input type="range" id="f-floor" min="1" max="12" value="1"><output id="o-floor">1</output></div>
+      </div>
+      <div class="fld">
+        <span>Price up to</span>
+        <div class="rng"><input type="range" id="f-price" min="30000" max="130000" step="1000" value="130000"><output id="o-price">any</output></div>
+      </div>
+    </div>
+      <div class="end">
+        <span id="count"></span>
+        <a class="btn btn--amber btn--sm" id="seethem" href="#flats">See them</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================== key numbers -->
+<section id="numbers" class="sec sec--tight sec--navy">
+  <div class="wrap">
+    <div class="nums cells cells-5">
+      <div><div class="k" data-v="floors">12</div><div class="l">Floors</div></div>
+      <div><div class="k" data-v="flats">72</div><div class="l">Flats, <span class="hi"><span data-v="available">17</span> still available</span></div></div>
+      <div><div class="k">100<small>%</small></div><div class="l">Built</div></div>
+      <div><div class="k sm">Right after<br>purchase</div><div class="l">Keys</div></div>
+      <div><div class="k"><span data-v="landmarkMin">25</span><small>min</small></div><div class="l">To <span data-v="landmark">Tbilisi</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== about -->
+<section id="about" class="sec" data-rules>
+  <div class="wrap">
+    <div class="split rv">
+      <div>
+        <span class="eyebrow">About the project</span>
+        <h2 class="hd">A home you can see, touch and move into</h2>
+      </div>
+      <div>
+        <p class="lead" style="margin-top:0">
+          <span data-v="project">Todria 11</span> is a finished residential building by LP Group
+          in <span data-v="district">Todria</span>. The facade, lobby, lifts, courtyard and
+          parking are complete. You buy exactly what you see — not a render.</p>
+      </div>
+    </div>
+
+    <div class="cells cells-3 rv" style="margin-top:clamp(36px,4.5vw,64px)">
+      <div class="cell">
+        <div class="ico"><svg><use href="#i-check"/></svg></div>
+        <h3>Finished, not promised</h3>
+        <p>The building is complete. Visit any day and inspect your flat in person.</p>
+      </div>
+      <div class="cell">
+        <div class="ico"><svg><use href="#i-shield"/></svg></div>
+        <h3>Built to last</h3>
+        <p><span data-v="frame">Monolithic reinforced-concrete frame</span>,
+           <span data-v="insulation">100&nbsp;mm mineral-wool facade insulation</span>,
+           <span data-v="windows">REHAU double-glazed windows</span>.
+           Quality you can check with your own eyes.</p>
+      </div>
+      <div class="cell">
+        <div class="ico"><svg><use href="#i-cube"/></svg></div>
+        <h3>Smart layouts</h3>
+        <p>Bright rooms, no wasted corridors, <span data-v="balconyLine">a balcony in every flat</span>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================== location -->
+<section id="location" class="sec sec--paper" data-rules>
+  <div class="wrap split rv">
+    <div>
+      <span class="eyebrow">Location</span>
+      <h2 class="hd">Everything you need, a short walk away</h2>
+      <p class="lead"><span data-v="district">Todria</span> gives you quiet streets for family
+        life and quick routes to the rest of <span data-v="city">Rustavi</span>.</p>
+      <div class="actions"><a class="btn" href="#contacts">Book a site visit</a></div>
+    </div>
+    <div>
+      <a class="mapcard" data-v="mapUrl" data-href="href" target="_blank" rel="noopener">
+        <div>
+          <div class="pin"><svg width="26" height="26"><use href="#i-pin"/></svg></div>
+          <div class="addr" data-v="address">Todria St. 11, Rustavi</div>
+          <div class="sm">Open in Maps</div>
+        </div>
+      </a>
+      <div class="cells cells-3" id="walks"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================== amenities -->
+<section id="amenities" class="sec" data-rules>
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">Amenities</span>
+      <h2 class="hd">Everything around your flat is finished too</h2>
+    </div>
+    <div class="cells cells-3 rv" style="margin-top:clamp(28px,3.4vw,46px)">
+      <div class="cell"><div class="ico"><svg><use href="#i-car"/></svg></div><h3>Underground parking</h3><p>Your car stays dry, safe and close to the lift.</p></div>
+      <div class="cell"><div class="ico"><svg><use href="#i-shield"/></svg></div><h3>Secure entrance &amp; CCTV</h3><p>Only residents and their guests get in.</p></div>
+      <div class="cell"><div class="ico"><svg><use href="#i-play-yard"/></svg></div><h3>Courtyard &amp; playground</h3><p>Children play in sight of your windows.</p></div>
+      <div class="cell"><div class="ico"><svg><use href="#i-lift"/></svg></div><h3>Modern lifts</h3><p><span data-v="lifts">Şahin</span>, quiet and fast.</p></div>
+      <div class="cell"><div class="ico"><svg><use href="#i-box"/></svg></div><h3>Storage rooms</h3><p>Space for bikes, tyres and seasonal things.</p></div>
+      <div class="cell"><div class="ico"><svg><use href="#i-shop"/></svg></div><h3>Shops downstairs</h3><p><span data-v="shopsLine">Pharmacy and a grocery</span> on the ground floor.</p></div>
+    </div>
+    <div class="finish rv">
+      <svg width="22" height="22"><use href="#i-check"/></svg>
+      <span>Flats are delivered in <b data-v="condition">white frame</b> condition.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= prices -->
+<section id="prices" class="sec sec--paper" data-rules>
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">Prices &amp; payment</span>
+      <h2 class="hd">Clear prices. Flexible payment.</h2>
+      <p class="lead">Every flat shows its price online, updated live. No calls needed
+        to find out how much it costs.</p>
+    </div>
+
+    <div class="cells cells-4 rv" id="pricecards"></div>
+
+    <div class="pay cells cells-3 rv">
+      <div>
+        <span class="tag">Option one</span>
+        <h3>Full payment</h3>
+        <p>Pay in full at signing and take <b><span data-v="discountFull">5</span>% off</b> the listed price.</p>
+      </div>
+      <div>
+        <span class="tag">Option two</span>
+        <h3>Developer instalment</h3>
+        <p><b><span data-v="downPct">30</span>% down</b>, the rest over
+           <b><span data-v="months">24</span> months</b> at <b>0%</b> interest.
+           Arranged in our own sales office, no bank involved.</p>
+      </div>
+      <div>
+        <span class="tag">Option three</span>
+        <h3>Mortgage</h3>
+        <p>With our partner banks. We help with the paperwork.</p>
+        <ul id="banklist"></ul>
+      </div>
+    </div>
+
+    <div class="calc rv">
+      <div>
+        <span class="eyebrow">Calculator</span>
+        <h3>See your monthly payment</h3>
+        <div class="f">
+          <div>
+            <div class="lrow"><label for="c-price">Flat price</label><b id="c-price-v">$72,200</b></div>
+            <input type="range" id="c-price" min="30000" max="140000" step="500" value="72200">
+          </div>
+          <div>
+            <div class="lrow"><label for="c-down">Down payment</label><b id="c-down-v">30% · $21,660</b></div>
+            <input type="range" id="c-down" min="10" max="90" step="5" value="30">
+          </div>
+          <div>
+            <div class="lrow"><label for="c-term">Term</label><b id="c-term-v">24 months</b></div>
+            <input type="range" id="c-term" min="6" max="60" step="6" value="24">
+          </div>
+        </div>
+      </div>
+      <div class="out">
+        <div class="lb">Monthly payment</div>
+        <div class="big" id="c-out">$2,106</div>
+        <div class="sm">Developer instalment at 0% interest.<br>
+          <span id="c-note"></span></div>
+      </div>
+    </div>
+
+    <div class="urgency rv">
+      <span>Only <b><span data-v="available">17</span> ready flats</b> left in
+        <span data-v="project">Todria 11</span></span>
+      <a class="btn btn--ghost btn--sm" href="#contacts">Get the full price list</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ gallery -->
+<section id="gallery" class="sec" data-rules>
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">Real photos &amp; video</span>
+      <h2 class="hd">Real photos. No renders.</h2>
+      <p class="lead">Every image here was taken on site. Come and compare for yourself.</p>
+    </div>
+    <div class="tabs rv" id="gtabs" role="tablist"></div>
+    <div class="grid-g rv" id="ggrid"></div>
+    <div class="actions rv"><a class="btn btn--amber" href="#contacts">Book a viewing — today or this weekend</a></div>
+  </div>
+</section>
+
+<!-- ========================================================== developer -->
+<section id="developer" class="sec sec--navy" data-rules>
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">About the developer</span>
+      <h2 class="hd">LP Group: we finish what we start</h2>
+      <p class="lead"><span data-v="years">14</span> years in construction,
+        <span data-v="delivered">9</span> buildings delivered,
+        <span data-v="families">1,200</span> families already moved in.
+        <span data-v="project">Todria 11</span> is the proof — finished and standing.</p>
+    </div>
+    <div class="bigstats cells cells-3 rv">
+      <div><div class="k"><span data-v="years">14</span></div><div class="l">Years in construction</div></div>
+      <div><div class="k"><span data-v="delivered">9</span></div><div class="l">Buildings delivered</div></div>
+      <div><div class="k"><span data-v="families">1,200</span></div><div class="l">Families moved in</div></div>
+    </div>
+    <div class="logos rv" id="partners"></div>
+  </div>
+</section>
+
+<!-- ============================================================= questions -->
+<section id="faq" class="sec" data-rules>
+  <div class="wrap">
+    <div class="split rv">
+      <div>
+        <span class="eyebrow">FAQ</span>
+        <h2 class="hd">Questions buyers ask us</h2>
+        <p class="lead">Anything not here, a manager will answer on the phone in a minute.</p>
+        <div class="actions"><a class="btn btn--ghost" data-v="phone" data-href="tel" href="#">Call us</a></div>
+      </div>
+      <div class="faq">
+        <details open><summary>Can I move in right away?</summary><div class="ans">Yes. The building is finished. After signing and payment you get the keys.</div></details>
+        <details><summary>What condition are the flats in?</summary><div class="ans" data-v="conditionLong">White frame.</div></details>
+        <details><summary>Can I pay in instalments?</summary><div class="ans">Yes: <span data-v="downPct">30</span>% down and the rest over <span data-v="months">24</span> months, at 0% interest.</div></details>
+        <details><summary>Can I use a mortgage?</summary><div class="ans">Yes, with <span data-v="banksLine">our partner banks</span>. Our manager helps with the documents.</div></details>
+        <details><summary>Is there parking?</summary><div class="ans" data-v="parkingLine">Yes — underground, sold separately.</div></details>
+        <details><summary>Can foreigners buy?</summary><div class="ans">Yes, foreigners can own apartments in Georgia. We guide you through the process.</div></details>
+        <details><summary>How do I see the flat?</summary><div class="ans">Book a viewing and a manager will meet you on site.</div></details>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ last call -->
+<section id="contacts" class="sec sec--navy" data-rules>
+  <div class="wrap split">
+    <div class="rv">
+      <span class="eyebrow">Book a viewing</span>
+      <h2 class="hd">Come see your future home this week</h2>
+      <p class="lead">Leave your number. A manager will call within
+        <span data-v="callbackMinutes">15</span> minutes, send the price list
+        and book a time that suits you.</p>
+      <div class="ticks">
+        <div><svg width="19" height="19"><use href="#i-check"/></svg><span>Viewings seven days a week, at the hour that suits you.</span></div>
+        <div><svg width="19" height="19"><use href="#i-check"/></svg><span>The full price list, with every flat still available.</span></div>
+        <div><svg width="19" height="19"><use href="#i-check"/></svg><span>No pressure — walk the building and decide after.</span></div>
+      </div>
+    </div>
+    <div class="rv">
+      <form class="lead-form" id="leadform" novalidate>
+        <div class="f">
+          <label for="l-name">Name</label>
+          <input id="l-name" name="name" autocomplete="name" placeholder="Your name" required>
+          <div class="err" data-for="l-name"></div>
+        </div>
+        <div class="f">
+          <label for="l-phone">Phone</label>
+          <input id="l-phone" name="phone" type="tel" autocomplete="tel" placeholder="+995 5__ __ __ __" required>
+          <div class="err" data-for="l-phone"></div>
+        </div>
+        <div class="f">
+          <label for="l-flat">Flat you liked</label>
+          <select id="l-flat" name="flat"></select>
+        </div>
+        <button class="btn btn--amber" type="submit">Book my viewing</button>
+        <p class="fine"><svg width="15" height="15"><use href="#i-lock"/></svg>We never share your number.</p>
+      </form>
+      <div class="done" id="done">
+        <div class="ok"><svg width="30" height="30"><use href="#i-check"/></svg></div>
+        <h3>Thank you!</h3>
+        <p>We'll call you within <span data-v="callbackMinutes">15</span> minutes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ============================================================= footer -->
+<footer id="foot">
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="logo"><span class="mk">LP</span><span class="wm">LP Group</span></div>
+        <span class="ka">ელპი ჯგუფი</span>
+        <p style="margin-top:14px; max-width:34ch">A finished residential building in
+          <span data-v="district">Todria</span>, <span data-v="city">Rustavi</span>.
+          Keys right after purchase.</p>
+      </div>
+      <div>
+        <h4>Sales office</h4>
+        <ul>
+          <li data-v="address">Todria St. 11, Rustavi</li>
+          <li data-v="hours">Mon–Sat, 10:00–19:00</li>
+          <li><a data-v="phone" data-href="tel" href="#">+995 591 70 04 00</a></li>
+          <li><a data-v="email" data-href="mailto" href="#">sales@lpgroup.ge</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>The project</h4>
+        <ul>
+          <li><a href="#about">About</a></li>
+          <li><a href="#location">Location</a></li>
+          <li><a href="#prices">Prices &amp; payment</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Follow</h4>
+        <ul>
+          <li><a data-v="facebook" data-href="href" target="_blank" rel="noopener" href="#">Facebook</a></li>
+          <li><a href="./lab.html">The render, in detail</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bar">
+      <p>© <span id="year">2026</span> LP Group · ელპი ჯგუფი. Company details and privacy
+        policy available at the sales office. Prices and availability are updated in real
+        time; confirm with a manager before purchase.</p>
+      <p>Rendered live with three.js on WebGPU.</p>
+    </div>
+  </div>
+</footer>
+
+<div id="lightbox"><button class="x" aria-label="Close">✕</button><img alt=""></div>
+
+<script type="module" src="./app.js"></script>
+<script type="module" src="./site.js"></script>
+</body>
+</html>

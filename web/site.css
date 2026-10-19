@@ -1,0 +1,1167 @@
+/* ===================================================================== *
+ *  LP Group - sales page
+ *
+ *  Palette straight off the brand's own post: cream paper, deep navy ink,
+ *  an amber accent, a sand gradient. The only hues added are the three a
+ *  flat's availability needs, mixed to sit beside the navy.
+ *
+ *  The layout is rectangular on purpose. Nothing is rounded, nothing
+ *  carries a shadow, and blocks are separated by hairlines rather than
+ *  floated on cards: a faint six-column rule runs behind the page and
+ *  everything snaps to it, so the whole thing reads as one drawing
+ *  rather than a stack of widgets.
+ * ===================================================================== */
+
+@font-face{
+  font-family:Jost; src:url(./fonts/Jost.ttf) format('truetype-variations');
+  font-weight:100 900; font-style:normal; font-display:swap;
+}
+@font-face{
+  font-family:'Noto Sans Georgian'; src:url(./fonts/NotoSansGeorgian.ttf) format('truetype-variations');
+  font-weight:100 900; font-style:normal; font-display:swap;
+  unicode-range:U+10A0-10FF,U+1C90-1CBF,U+2D00-2D2F;
+}
+/* Every Georgian face here is picked PER CHARACTER and not per element,
+   which is what `unicode-range` buys: the Latin sitting inside a Georgian
+   line - LP GROUP, REHAU, three.js, m² - stays in Jost, so a mixed
+   headline still reads as one headline, and a page left in English never
+   downloads either Georgian face for the two words in the footer.
+
+   BPG NINO MTAVRULI is the title face, and it is a LEGACY font: it draws
+   MTAVRULI CAPITALS at the ordinary Mkhedruli code points and has nothing
+   at all at the Mtavruli block Unicode 11 added. That is what makes it
+   work here without touching a character of text - the page keeps its
+   Georgian in lower-case Mkhedruli, which is what copy, search and a
+   screen reader want, and wherever the title face is in force the FONT
+   draws the capitals. Converting the text to real Mtavruli instead would
+   push every title straight off this font and back onto Noto.
+
+   It also means `text-transform:uppercase` is irrelevant to the Georgian
+   either way: the CSS Text spec excludes Georgian from it on purpose,
+   since the language has no running capitals. See
+   web/fonts/BPGNinoMtavruli-LICENCE.txt. */
+@font-face{
+  font-family:'BPG Nino Mtavruli'; src:url(./fonts/BPGNinoMtavruli.otf) format('opentype');
+  font-weight:400 700; font-style:normal; font-display:swap;
+  unicode-range:U+10D0-10FF;
+}
+:root{
+  --font-body:Jost,'Noto Sans Georgian',ui-sans-serif,system-ui,sans-serif;
+  --font-title:Jost,'BPG Nino Mtavruli','Noto Sans Georgian',ui-sans-serif,system-ui,sans-serif;
+}
+h1,h2,h3,h4,.mi,.logo .wm,.btn,.chip,.eyebrow,.badge{font-family:var(--font-title)}
+
+/* `.mtav` is put on by `applyTitleFont` in i18n.js, over exactly the
+   elements this stylesheet already sets in CAPITALS - the design decides
+   what a title is and the Georgian follows it, which is what Mtavruli is
+   for. There are 55 such rules and mirroring them by hand here is a list
+   that goes stale; the computed style cannot. */
+html[data-lang=ka] .mtav{font-family:var(--font-title)}
+
+/* Georgian sits a little lower than Jost at the same size, so the line
+   height is opened up; and Mtavruli set with the .17em the Latin
+   small-caps are tracked at reads as letters standing apart rather than
+   as a word - the capitals are wide already. */
+html[data-lang=ka]{ --track-wide:.09em; }
+html[data-lang=ka] h1,
+html[data-lang=ka] h2{line-height:1.18}
+html[data-lang=ka] .mtav{letter-spacing:var(--track-wide)}
+
+:root{
+  --cream:#f9f0e7;  --paper:#fdf6ed;  --paper-2:#f4e9db;
+  --navy:#1d3559;   --navy-900:#122440;
+  --navy-rgb:29,53,89;                 /* the same blue, for washes */
+  --amber:#e5af69;  --amber-700:#b07e30;
+  --sand:#a88658;
+  --ink:var(--navy);
+  --ink-70:rgba(29,53,89,.74);
+  --ink-50:rgba(29,53,89,.55);
+  --line:rgba(29,53,89,.22);
+  --hair:rgba(29,53,89,.13);
+  --on-navy:#f6ece0;
+  --on-navy-dim:rgba(246,236,224,.62);
+  --on-navy-line:rgba(246,236,224,.2);
+  --ok:#3c7a57; --hold:#b07e30; --gone:#98a1ac;
+  --head-h:62px;
+  --page:clamp(16px,2.1vw,34px);
+  /* the type rail's width. The floor view's scrim is faded out against
+     it, so the two have to read the same number. */
+  --rail-w:min(430px,44vw);
+  --gap:clamp(14px,1.7vw,30px);        /* the column gutter everything shares */
+  color-scheme:light;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth; scroll-padding-top:var(--head-h)}
+@media (prefers-reduced-motion:reduce){ html{scroll-behavior:auto} }
+body{
+  margin:0; background:var(--cream); color:var(--ink);
+  font:400 clamp(15px,1vw,16.5px)/1.6 var(--font-body);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+img{max-width:100%; display:block}
+a{color:inherit; text-decoration:none}
+button,input,select,textarea{font:inherit; color:inherit; border-radius:0}
+h1,h2,h3,h4{margin:0; font-weight:600; line-height:1.05}
+p{margin:0}
+:focus-visible{outline:2px solid var(--amber-700); outline-offset:2px}
+
+/* micro-type: every label, tab, button and caption on the page */
+.mi{font-size:11.5px; font-weight:600; letter-spacing:.17em; text-transform:uppercase}
+
+/* a value content.js still marks as a guess, shown only with ?ph=1 */
+body.ph [data-ph]{background:rgba(229,175,105,.38); box-shadow:0 0 0 2px var(--amber)}
+
+/* ------------------------------------------------------------ scaffold */
+.wrap{width:100%; max-width:1680px; margin-inline:auto; padding-inline:var(--page); position:relative}
+.sec{
+  padding-block:clamp(56px,7vw,104px); position:relative; z-index:1;
+  background:var(--cream);          /* opaque: the canvas is behind the page */
+}
+.sec--tight{padding-block:0}
+.sec--paper{background:var(--paper-2)}
+main>section:not(#hero), #foot{position:relative; z-index:1}
+.sec--navy{background:var(--navy); color:var(--on-navy)}
+.sec--navy .eyebrow{color:var(--amber)}
+.sec--navy .eyebrow::before{background:var(--amber)}
+.sec--navy .lead{color:var(--on-navy-dim)}
+.sec+.sec{border-top:1px solid var(--hair)}
+.sec--navy+.sec, .sec+.sec--navy{border-top-color:transparent}
+
+/* the faint column rule the whole page is set against */
+/* Twelve columns, the same twelve every block below is placed on, so a
+   rule line only ever falls where a column starts. Drawn at the track's
+   leading edge and gapped like the content, never guessed at. */
+.rules{
+  position:absolute; inset:0; pointer-events:none; z-index:0;
+  display:grid; grid-template-columns:repeat(12,1fr); column-gap:var(--gap);
+}
+.rules i{border-left:1px solid rgba(29,53,89,.06); margin-left:calc(var(--gap) / -2)}
+.rules i:first-child{border-left-color:transparent}
+.sec--navy .rules i{border-left-color:rgba(246,236,224,.085)}
+@media (max-width:900px){ .rules i:nth-child(even){border-left-color:transparent} }
+.wrap>*:not(.rules){position:relative; z-index:1}
+
+.eyebrow{
+  font-size:11.5px; font-weight:600; letter-spacing:.17em; text-transform:uppercase;
+  color:var(--amber-700); margin-bottom:22px; display:flex; align-items:center; gap:12px;
+}
+.eyebrow::before{content:""; width:26px; height:1px; background:var(--amber-700); flex:0 0 auto}
+h2.hd{
+  font-size:clamp(1.75rem,3.5vw,3.1rem); text-transform:uppercase;
+  letter-spacing:-.005em; line-height:1.03;
+}
+.lead{margin-top:20px; max-width:46ch; color:var(--ink-70); font-size:clamp(15.5px,1.25vw,18px)}
+
+/* A section head is two blocks on one line of the grid: the headline on
+   the left half, the paragraph set against the right. Stacked in a column
+   they left the right half of every section empty. */
+.sec-head{display:grid; grid-template-columns:repeat(12,1fr); column-gap:var(--gap)}
+.sec-head .eyebrow{grid-column:1/-1; grid-row:1}
+.sec-head h2.hd{grid-column:1/span 6; grid-row:2}
+.sec-head .lead{grid-column:8/-1; grid-row:2; align-self:end; margin-top:0; max-width:none}
+.sec-head .actions{grid-column:1/-1; grid-row:3}
+/* nothing set against it - let the headline take the width it wants */
+.sec-head:not(:has(.lead)) h2.hd{grid-column:1/span 8}
+@media (max-width:900px){
+  .sec-head h2.hd, .sec-head .lead{grid-column:1/-1}
+  .sec-head .lead{grid-row:3; margin-top:20px}
+  .sec-head .actions{grid-row:4}
+}
+.actions{display:flex; flex-wrap:wrap; gap:10px; margin-top:32px}
+
+/* -------------------------------------------------------------- buttons */
+.btn{
+  --bg:var(--navy); --fg:var(--on-navy); --bd:var(--navy);
+  display:inline-flex; align-items:center; justify-content:center; gap:10px;
+  background:var(--bg); color:var(--fg); border:1px solid var(--bd);
+  padding:15px 28px; cursor:pointer; text-align:center;
+  font-size:11.5px; font-weight:600; letter-spacing:.17em; text-transform:uppercase;
+  transition:background .18s, color .18s, border-color .18s;
+}
+.btn:hover{--bg:var(--amber); --fg:var(--navy); --bd:var(--amber)}
+.btn--amber{--bg:var(--amber); --fg:var(--navy); --bd:var(--amber)}
+.btn--amber:hover{--bg:var(--navy); --fg:var(--on-navy); --bd:var(--navy)}
+.btn--ghost{--bg:transparent; --fg:var(--navy); --bd:var(--line)}
+.btn--sm{padding:11px 18px; font-size:10.5px; letter-spacing:.14em}
+.btn[disabled]{opacity:.4; pointer-events:none}
+
+.badge{
+  display:inline-flex; align-items:center; gap:9px;
+  background:var(--amber); color:var(--navy);
+  font-size:11px; font-weight:600; letter-spacing:.17em; text-transform:uppercase;
+  padding:8px 15px;
+}
+.badge::before{content:""; width:6px; height:6px; background:var(--navy)}
+
+/* --------------------------------------------------------------- header */
+#head{
+  position:fixed; inset:0 0 auto; z-index:40; height:var(--head-h);
+  display:flex; align-items:center; border-bottom:1px solid transparent;
+  transition:background .3s, border-color .3s, color .3s;
+}
+#head.solid{
+  background:rgba(249,240,231,.93); backdrop-filter:blur(14px) saturate(1.3);
+  -webkit-backdrop-filter:blur(14px) saturate(1.3); border-bottom-color:var(--line);
+}
+#head .wrap{display:flex; align-items:center; gap:clamp(10px,2vw,30px); max-width:none}
+.logo{display:flex; align-items:center; gap:11px; flex:0 0 auto}
+.logo .mk{
+  width:34px; height:34px; border:1px solid currentColor; display:grid; place-items:center;
+  font-size:13px; font-weight:600; letter-spacing:.04em; flex:0 0 auto;
+}
+.logo .wm{font-size:14px; font-weight:600; letter-spacing:.19em; text-transform:uppercase; line-height:1}
+.logo .wm small{
+  display:block; font-size:9px; letter-spacing:.17em; font-weight:500;
+  color:var(--ink-50); margin-top:4px;
+}
+#head.onhero:not(.solid){color:#fff8ef}
+#head.onhero:not(.solid) .logo .wm small{color:rgba(255,248,239,.68)}
+#head.onhero:not(.solid) #nav a{color:rgba(255,248,239,.8)}
+#head.onhero:not(.solid) #nav a:hover,#head.onhero:not(.solid) .tel{color:#fff8ef}
+#head.onhero:not(.solid) .burger span{background:#fff8ef}
+#head.onhero:not(.solid) .btn--ghost{--fg:#fff8ef; --bd:rgba(255,248,239,.45)}
+
+#nav{display:flex; gap:clamp(10px,1.7vw,26px); margin-inline:auto}
+#nav a{
+  font-size:11px; font-weight:600; letter-spacing:.15em; text-transform:uppercase;
+  color:var(--ink-70); padding:5px 0; border-bottom:1px solid transparent; transition:.18s;
+}
+#nav a:hover{color:var(--ink); border-bottom-color:currentColor}
+.tel{
+  font-size:12.5px; font-weight:600; letter-spacing:.09em; white-space:nowrap;
+  border-bottom:1px solid var(--line); padding-bottom:2px; transition:.18s;
+}
+.tel:hover{border-bottom-color:currentColor}
+.burger{display:none; background:none; border:0; cursor:pointer; padding:8px; margin-right:-8px}
+.burger span{display:block; width:22px; height:1.5px; background:var(--navy); transition:transform .25s, opacity .2s}
+.burger span+span{margin-top:6px}
+body.menu .burger span:nth-child(1){transform:translateY(7.5px) rotate(45deg)}
+body.menu .burger span:nth-child(2){opacity:0}
+body.menu .burger span:nth-child(3){transform:translateY(-7.5px) rotate(-45deg)}
+
+@media (max-width:1040px){
+  #nav{
+    position:fixed; inset:var(--head-h) 0 auto; flex-direction:column; gap:0; margin:0;
+    background:var(--cream); padding:4px var(--page) 20px; border-bottom:1px solid var(--line);
+    transform:translateY(-6px); opacity:0; pointer-events:none; transition:.22s;
+  }
+  body.menu #nav{transform:none; opacity:1; pointer-events:auto}
+  #nav a{padding:15px 0; border-bottom:1px solid var(--hair); font-size:13px; color:var(--ink)}
+  #head.onhero:not(.solid) #nav a{color:var(--ink)}
+  .burger{display:block; order:3}
+  .tel{margin-inline-start:auto}
+  #head .cta{display:none}
+}
+@media (max-width:620px){ .tel{display:none} .logo .wm small{display:none} }
+
+/* ----------------------------------------------------------------- hero */
+/* One fixed canvas behind the whole document - app.js sizes it to the
+   window. The hero is the stretch of page that lets it through; every
+   section below is opaque and scrolls over it, and once the hero is gone
+   the canvas is hidden outright so it costs nothing to composite. */
+#stage{position:fixed; inset:0; z-index:0; display:grid; place-items:center}
+#stage.away{visibility:hidden}
+#frame{position:relative; overflow:hidden; touch-action:none}
+#frame canvas{display:block}
+
+#hero{
+  position:relative; z-index:1; min-height:100svh; min-height:100dvh;
+  /* the type is centred down the hero, not stood on its foot */
+  display:flex; flex-direction:column; justify-content:center;
+  pointer-events:none;                      /* the canvas behind takes the drag */
+  padding-bottom:0; padding-top:calc(var(--head-h) + 20px);
+}
+/* The scrim only has to carry the type, which sits on the left, so it is
+   weighted that way: the brand's own navy run left to right, over a lift
+   from the foot. It is over by 50% of the frame and already down to a
+   hundredth at 44%, so where the building begins - its near corner is
+   pinned at 52%, its gable reaches back to about 40% - there is nothing of
+   it left to see. */
+#hero::before{
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background:
+    linear-gradient(to right,
+      rgba(var(--navy-rgb),.92) 0%, rgba(var(--navy-rgb),.74) 14%,
+      rgba(var(--navy-rgb),.42) 26%, rgba(var(--navy-rgb),.14) 36%,
+      rgba(var(--navy-rgb),.03) 44%, rgba(var(--navy-rgb),0) 50%),
+    linear-gradient(to top, rgba(9,20,38,.82) 0%, rgba(9,20,38,.46) 26%,
+      rgba(9,20,38,.12) 50%, rgba(9,20,38,0) 68%);
+}
+#hero::after{
+  content:""; position:absolute; inset:0 0 auto; height:calc(var(--head-h) + 50px);
+  background:linear-gradient(to bottom, rgba(9,20,38,.5), rgba(9,20,38,0));
+  pointer-events:none;
+}
+/* In the floor view the scrim stops at the cards.
+   The street shot is a picture with type over it, so the navy runs half way
+   across the frame and the building sits in the clear half. The floor view is
+   not that: the plate fills the display edge to edge, so every centimetre the
+   scrim runs past the rail is a flat put in shadow for nothing. Here it is
+   full strength behind the cards and gone just past them. */
+@media (min-width:761px){
+  body.floorview #hero::before{
+    background:
+      linear-gradient(to right,
+        rgba(var(--navy-rgb),.90) 0,
+        rgba(var(--navy-rgb),.86) calc(var(--page) + var(--rail-w) * .7),
+        rgba(var(--navy-rgb),.66) calc(var(--page) + var(--rail-w)),
+        rgba(var(--navy-rgb),.38) calc(var(--page) + var(--rail-w) + 130px),
+        rgba(var(--navy-rgb),.14) calc(var(--page) + var(--rail-w) + 280px),
+        rgba(var(--navy-rgb),0)   calc(var(--page) + var(--rail-w) + 420px)),
+      linear-gradient(to top, rgba(9,20,38,.52) 0%, rgba(9,20,38,.14) 22%,
+        rgba(9,20,38,0) 44%);
+  }
+  /* ...and with one flat open it stops at the card.
+     The storey's scrim fades out 420 px past the rail, which is room the
+     floor view needs - the plate runs edge to edge there and the fade has
+     to clear the type without a seam. One flat is framed in the glass
+     BESIDE the card and begins where the gutter ends, so those 420 px were
+     laid straight across the near third of it: the balcony and the living
+     room came out a stop darker than the bedroom at the far end of the same
+     flat, for nothing. The card carries its own glass, so the scrim only
+     has to see it off its own edge. The lift off the foot comes down with
+     it, for the same reason - the flat stands on the bottom of the window
+     here, where the storey stood well clear of it. */
+  body.floorview.flatview #hero::before{
+    background:
+      linear-gradient(to right,
+        rgba(var(--navy-rgb),.88) 0,
+        rgba(var(--navy-rgb),.82) calc(var(--page) + var(--rail-w) * .7),
+        rgba(var(--navy-rgb),.46) calc(var(--page) + var(--rail-w)),
+        rgba(var(--navy-rgb),.12) calc(var(--page) + var(--rail-w) + 46px),
+        rgba(var(--navy-rgb),0)   calc(var(--page) + var(--rail-w) + 120px)),
+      linear-gradient(to top, rgba(9,20,38,.34) 0%, rgba(9,20,38,.08) 14%,
+        rgba(9,20,38,0) 28%);
+  }
+}
+
+@media (max-width:760px){
+  #hero::before{background:linear-gradient(to top,
+    rgba(9,20,38,.88) 0%, rgba(9,20,38,.64) 32%, rgba(9,20,38,.26) 60%, rgba(9,20,38,0) 86%)}
+}
+#hero .wrap{color:#fff8ef; max-width:none; padding-bottom:clamp(16px,2.4vh,30px)}
+#hero .heroline{display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:22px}
+#hero .eyebrow{color:rgba(255,248,239,.82); margin:0}
+#hero .eyebrow::before{background:rgba(255,248,239,.6)}
+#hero h1{
+  font-size:clamp(2rem,4.4vw,3.5rem); line-height:1.04; letter-spacing:-.004em;
+  text-transform:uppercase; max-width:24ch;
+}
+#hero h1 em{font-style:normal; color:var(--amber)}
+#hero .lead{color:rgba(255,248,239,.84); max-width:46ch; margin-top:22px}
+
+/* the floor the pointer is on, answered over the building itself */
+/* The card belongs to the pointer, not to the corner of the hero: it is
+   placed in viewport coordinates by `floorTag` in site.js and moved with a
+   transform, so it travels with the mouse at no layout cost. Fixed, not
+   absolute, because the hero scrolls and the pointer does not. No transition
+   on the transform - the card has to sit ON the pointer, and any easing
+   leaves it trailing behind by a few frames. */
+#floortag{
+  position:fixed; left:0; top:0; z-index:2; will-change:transform;
+  pointer-events:none; display:flex; flex-direction:column; gap:4px;
+  padding:12px 16px; background:rgba(var(--navy-rgb),.86); color:#fff8ef;
+  border:1px solid rgba(255,248,239,.22);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+}
+#floortag b{font-size:13px; letter-spacing:.12em; text-transform:uppercase}
+#floortag span{font-size:12px; color:rgba(255,248,239,.72)}
+#floortag[hidden]{display:none}
+
+/* ------------------------------------------------- the floor view's arrows
+   Two buttons on the RIGHT END OF THE `Choose flat` LINE: the storey is
+   wider than the window and these walk it along the row. The right gutter
+   is the page's own, so they stand directly under the header's button, and
+   `placePager` drops them onto the label's line. The fallback top is for
+   the narrow layout, where there is no label to line up with. They are only
+   ever in the floor view, and the hero is `pointer-events:none` so they
+   have to take their own back. */
+.planpager{
+  position:absolute; right:var(--page); top:calc(var(--head-h) + 18px);
+  z-index:2; display:none; gap:8px; pointer-events:auto;
+}
+/* `:not([hidden])` on purpose: a plain `display:flex` here outranks the
+   browser's own rule for the hidden attribute, so the scene could never
+   take the arrows away again on a storey that fits the window whole. */
+body.floorview .planpager:not([hidden]){display:flex}
+.pgbtn{
+  display:grid; place-items:center; width:42px; height:34px; padding:0;
+  cursor:pointer; color:#fff8ef; font:inherit;
+  background:rgba(13,27,48,.62); border:1px solid rgba(255,248,239,.26);
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+  transition:border-color .15s, background .15s, opacity .15s;
+}
+.pgbtn:hover:not(:disabled), .pgbtn:focus-visible:not(:disabled){
+  background:rgba(13,27,48,.82); border-color:rgba(229,175,105,.75); outline:none;
+}
+/* one chevron drawn once and turned round for the other way */
+#plan-prev svg{transform:rotate(180deg)}
+/* At an end the arrow stays in place and goes quiet rather than vanishing:
+   a pager that changes width as you use it moves the other arrow out from
+   under the pointer. */
+.pgbtn:disabled{opacity:.3; cursor:default}
+/* ------------------------------------------------------- the hero filter
+   A band across the foot of the hero carrying the one set of flat
+   controls on the page - the picker further down reads the same ids, so
+   moving a slider here moves the grid there. */
+/* Out of sight for now, at the user's word: slid down and faded, not
+   removed, because its controls are the ones the grid further down the page
+   reads. Showing it again is deleting the three properties on the next
+   line - nothing else about the band changed. */
+#herofilter{
+  transform:translateY(100%); opacity:0; visibility:hidden;
+  position:relative; z-index:2; pointer-events:auto;
+  background:rgba(11,24,42,.58); border-top:1px solid rgba(255,248,239,.22);
+  backdrop-filter:blur(16px) saturate(1.3); -webkit-backdrop-filter:blur(16px) saturate(1.3);
+}
+#herofilter .wrap{
+  display:flex; align-items:center; gap:clamp(16px,2vw,32px); max-width:none;
+  padding-block:16px; color:#fff8ef;
+}
+#herofilter .filters{
+  flex:1 1 auto; margin:0; padding:0; border:0; background:none;
+  gap:14px clamp(16px,2vw,34px); align-items:center;
+}
+#herofilter .fld>span{color:rgba(255,248,239,.58)}
+#herofilter .chip{border-color:rgba(255,248,239,.34); color:#fff8ef}
+#herofilter .chip:hover{background:rgba(255,248,239,.12)}
+/* amber is the band's one action - a chosen filter reads as paper */
+#herofilter .chip[aria-pressed="true"]{background:#fff8ef; color:var(--navy); border-color:#fff8ef}
+#herofilter .rng input[type=range]{background:rgba(255,248,239,.3)}
+#herofilter .rng input[type=range]::-webkit-slider-thumb{background:var(--amber)}
+#herofilter .rng input[type=range]::-moz-range-thumb{background:var(--amber)}
+#herofilter .rng output{color:#fff8ef}
+#herofilter #count{color:rgba(255,248,239,.6); white-space:nowrap}
+#herofilter #count b{color:var(--amber)}
+#herofilter .end{display:flex; align-items:center; gap:18px; flex:0 0 auto; margin-left:auto}
+@media (max-width:1100px){
+  /* one row that scrolls sideways, so the hero keeps its height and
+     nothing has to be taken away from a phone. The end cap stays put and
+     the controls run under it, with the edge faded so it reads as more. */
+  #herofilter .wrap{gap:0; padding-inline:0}
+  #herofilter .filters{
+    flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none;
+    padding-inline:var(--page); scroll-padding-inline:var(--page);
+    -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 26px),transparent);
+    mask-image:linear-gradient(to right,#000 calc(100% - 26px),transparent);
+  }
+  #herofilter .filters::-webkit-scrollbar{display:none}
+  #herofilter .fld{flex:0 0 auto}
+  #herofilter .end{
+    gap:14px; padding-inline:14px var(--page);
+    border-left:1px solid rgba(255,248,239,.22); align-self:stretch;
+  }
+}
+@media (max-width:760px){ #herofilter #count{display:none} }
+
+body.scene2 #hero .heroline, body.scene2 #hero h1, body.scene2 #hero .lead{display:none}
+#flatcard{
+  display:none; pointer-events:auto; max-width:560px;
+  background:rgba(13,27,48,.62); border:1px solid rgba(255,248,239,.26);
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+  padding:24px 26px; color:#fff8ef;
+}
+body.scene2 #flatcard{display:block}
+/* The step's head line: the way back at its LEFT END, the badge that names
+   the step beside it. One row, wrapping only where the window is too narrow
+   to hold the two. */
+.stephead{display:flex; align-items:center; flex-wrap:wrap; gap:10px 16px}
+#flatcard h2{font-size:clamp(1.3rem,2.4vw,1.9rem); text-transform:uppercase; margin-top:14px}
+
+/* ------------------------------------------------- the type rail
+   The four plans, two up and two across, down the left of the floor view. It
+   replaces the flat card rather than joining it: looking straight down at a
+   storey, the plate runs the full width of the display and every pixel of
+   panel is laid over a flat someone might be looking at. Capped and
+   scrollable on a short window rather than growing to fit. */
+#typerail{
+  display:none; pointer-events:auto; width:var(--rail-w);
+  grid-template-columns:1fr 1fr; gap:10px; align-content:start;
+  max-height:min(74vh,640px); overflow:auto; overscroll-behavior:contain;
+  padding-right:4px;
+}
+body.floorview #typerail{display:grid}
+body.floorview #flatcard{display:none}
+/* One flat's card is taller than two rows of type cards and it is one
+   block, so the cap that keeps four cards from growing past the window
+   clipped its last line instead of scrolling to it.
+
+   It stands DOWN off the header less far, too. That margin is there to put
+   four cards on a line a good way down the window, with the storey's counts
+   over the clear strip above them; one card is half as tall again and the
+   same margin pushed its foot off a short window. The scene does not follow
+   it here - the open flat answers to the header rather than to this line
+   (see `planFocusPose`) - so the column can move on its own. */
+body.floorview.flatview #typerail{max-height:min(82vh,760px)}
+body.floorview.flatview #typerail .thead{margin-top:clamp(12px,7vh,64px)}
+/* The storey's counts, on the cards they count. The margin above is what
+   stands the cards down off the header - and the scene follows it, laying
+   the plate's top edge on the line the FIRST CARD starts on.
+
+   The 4 px is lifted off the line with `top`, not with the margin: the
+   margin is the number the cards stand on and the scene frames the storey
+   against, so taking it out of there would walk the building up the window
+   with the type. Everything else on the line - the view's name on the
+   building's corner, the arrows - is placed off this element's own box, so
+   the line moves as one and the plate does not move at all. */
+#typerail .thead{
+  grid-column:1 / -1; margin-top:clamp(24px,12vh,96px);
+  position:relative; top:-4px;
+  display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 16px;
+  font-size:10.5px; letter-spacing:.15em; text-transform:uppercase;
+  color:rgba(255,248,239,.72); padding:0 2px 1px;
+}
+#typerail .thead b{color:#fff8ef; font-weight:600}
+
+/* ----------------------------------------------- the way back out of a step
+   Every step - the storey, the open flat, the show flat - carries one, and it
+   is always the FIRST thing on that step's head line, at the left of the name
+   of the step. It is a LINK, not a button: a bordered box the size of the
+   calls to action read as a fourth thing to do, when all it does is undo the
+   click that got here. The rule is the only thing drawn - no box, no fill -
+   and it is the type's own underline rather than a border on a block, so it
+   is set on the inline box and sits a couple of pixels under the baseline. */
+.stepback{
+  flex:0 0 auto; white-space:nowrap; cursor:pointer;
+  font:inherit; font-size:10.5px; font-weight:600; letter-spacing:.15em;
+  text-transform:uppercase; text-decoration:none;
+  color:rgba(255,248,239,.72); border-bottom:1px solid rgba(255,248,239,.38);
+  padding-bottom:2px; background:none;
+  transition:color .18s, border-color .18s;
+}
+.stepback:hover, .stepback:focus-visible{color:var(--amber); border-bottom-color:var(--amber)}
+
+/* The view's own name, written on the top corner of the BUILDING: placed in
+   `placeFloorLabel` against the plate's left edge and dropped onto the same
+   line as the counts over the cards, so the two read as one line across the
+   window. Set in the counts' own small caps at their own size - it is a
+   label on a drawing, not a headline over a panel. */
+#floorlabel{
+  position:absolute; z-index:1; pointer-events:none;
+  font-size:10.5px; font-weight:600; letter-spacing:.15em; text-transform:uppercase;
+  color:#fff8ef; text-shadow:0 1px 10px rgba(9,20,38,.7);
+}
+/* ------------------------------------------------- the flats' own areas
+   One badge per flat in the floor view, standing in the middle of its own
+   plan: the area in an amber lozenge, the unit beside it on the navy, cut
+   to the brand's own two colours and its own square corners-on-a-pill
+   shape. The scene hands over a position in CSS pixels and how far that
+   flat has been furnished; everything else is here.
+
+   They are TAKEN OFF the flat the pointer is on, at once and on their own
+   ease rather than over the second the furniture takes to arrive: the
+   point of the hover is to see the rooms, and a badge over the middle of
+   them is the one thing standing in the way.
+
+   Two boxes, not one. The outer one is MOVED - the scene rewrites its
+   transform every frame the plan is dragged - and the inner one is what
+   fades, so a transition on the fade never finds itself easing the
+   position as well and lagging a drag by four tenths of a second. */
+#planbadges{position:absolute; inset:0; z-index:2; pointer-events:none}
+.pbadge{position:absolute; top:0; left:0; will-change:transform}
+.pbadge .pb{
+  display:flex; align-items:center; gap:7px;
+  padding:5px 13px 5px 5px; border-radius:999px;
+  background:var(--navy); color:#fff8ef;
+  box-shadow:0 2px 14px rgba(9,20,38,.45);
+  transform-origin:50% 50%;
+  transition:opacity .4s ease-in-out, transform .4s ease-in-out;
+}
+.pbadge[data-off] .pb{opacity:0; transform:scale(.78)}
+.pbadge b{
+  display:block; padding:3px 13px 4px; border-radius:999px;
+  background:var(--amber); color:var(--navy);
+  font-size:17px; font-weight:700; letter-spacing:-.01em; line-height:1;
+}
+.pbadge i{font-style:normal; font-size:15px; font-weight:600; line-height:1}
+.pbadge i sup{font-size:.62em; vertical-align:.52em; margin-left:.5px}
+@media (max-width:760px){
+  .pbadge .pb{gap:5px; padding:4px 10px 4px 4px}
+  .pbadge b{font-size:13.5px; padding:3px 10px 4px}
+  .pbadge i{font-size:12px}
+}
+@media (prefers-reduced-motion:reduce){ .pbadge .pb{transition:none} }
+
+/* ------------------------------------------------- the rooms of a flat
+   The fourth step. The open flat carries a dot on every room: the dot
+   names its room under the pointer and walks the camera into it when it is
+   clicked. The scene owns WHERE each one is - it projects the middle of
+   each room and says whether it is on the plate at all - and everything
+   below is what the page does about it.
+
+   The layer takes no pointer events and each dot takes its own, so the
+   drawing underneath is still draggable everywhere a dot is not. */
+#roomdots{position:absolute; inset:0; z-index:5; pointer-events:none}
+/* The button is a fixed 24 px target centred on the point the scene gave
+   it - the margin is what centres it, so the transform stays the raw
+   position and nothing has to be re-measured - and the NAME hangs off that
+   box rather than sitting in it. A name that was part of the button would
+   grow the button, and a button centred by a -50% transform would then
+   walk its own dot sideways every time somebody pointed at it. */
+.rdot{
+  position:absolute; top:0; left:0; width:24px; height:24px; margin:-12px 0 0 -12px;
+  padding:0; border:0; background:none; color:#fff8ef; font:inherit;
+  cursor:pointer; pointer-events:auto; will-change:transform;
+  transition:opacity .35s ease-in-out;
+}
+.rdot[hidden]{display:none}
+.rdot[data-off]{opacity:0; pointer-events:none}
+/* The dot itself: a ring with a filled heart, the way a map pin reads.
+   It grows rather than changing colour on hover - the plan under it is
+   already amber, and an amber dot on an amber floor is no dot at all. */
+.rdot i{
+  position:absolute; left:3px; top:3px; width:18px; height:18px;
+  border-radius:999px; background:var(--amber); border:2.5px solid var(--navy);
+  box-shadow:0 2px 10px rgba(9,20,38,.5);
+  transition:transform .18s ease-out;
+}
+.rdot:hover i, .rdot:focus-visible i{transform:scale(1.34)}
+/* The name, which is only there under the pointer. It is laid out at full
+   size and clipped to nothing, so it never reflows when it opens and the
+   dot it hangs off does not move. */
+.rdot span{
+  position:absolute; left:calc(100% + 3px); top:50%; transform:translateY(-50%);
+  max-width:0; overflow:hidden; white-space:nowrap;
+  border-radius:999px; background:var(--navy); color:#fff8ef;
+  font-size:12.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+  line-height:1; padding:7px 0; opacity:0;
+  box-shadow:0 2px 14px rgba(9,20,38,.45);
+  transition:max-width .22s ease-out, padding .22s ease-out, opacity .18s ease-out;
+}
+.rdot:hover span, .rdot:focus-visible span{
+  max-width:240px; padding:7px 13px; opacity:1;
+}
+/* ...and the other way round against the right-hand edge of the window */
+.rdot[data-flip] span{left:auto; right:calc(100% + 3px)}
+.rdot:focus-visible{outline:none}
+.rdot:focus-visible i{border-color:#fff8ef}
+
+/* ...and the bar that stands in for the plan once the camera is inside a
+   room. It is centred across the foot of the window rather than put in the
+   column with the cards: in a room the whole window is the room, and the
+   two things to do in one - look at the next one, or come back out - are
+   not card business. */
+/* `pointer-events:auto` is not optional in here: the whole hero is
+   `pointer-events:none` so that the canvas behind it takes every drag, and
+   anything on top of it that wants to be CLICKED has to ask. Without it
+   the bar is drawn, lights up on hover - and the click goes through it to
+   the scene. */
+#roombar{
+  position:absolute; left:50%; bottom:26px; transform:translateX(-50%);
+  z-index:6; display:flex; align-items:stretch; gap:8px; pointer-events:auto;
+  animation:roombar-in .35s ease-out both;
+}
+#roombar[hidden]{display:none}
+/* The keys, said once over the room bar and then gone. It is `hidden` that
+   takes it out of the layout and the class that fades it, so the fade can
+   finish before the element goes - and it never takes the pointer, because
+   it sits exactly where a visitor is dragging to look round. */
+#roomhint{
+  position:absolute; left:50%; bottom:76px; transform:translateX(-50%);
+  z-index:6; margin:0; padding:7px 14px; pointer-events:none;
+  background:rgba(13,27,48,.56); border:1px solid rgba(255,248,239,.16);
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+  color:rgba(255,248,239,.82); font-size:11.5px; letter-spacing:.08em;
+  text-transform:uppercase; white-space:nowrap;
+  animation:roombar-in .35s ease-out both;
+  transition:opacity .9s ease;
+}
+#roomhint b{color:#fff8ef; font-weight:600; letter-spacing:.14em}
+#roomhint[hidden]{display:none}
+#roomhint.gone{opacity:0}
+@keyframes roombar-in{from{opacity:0; transform:translate(-50%, 10px)} to{opacity:1; transform:translate(-50%, 0)}}
+#roombar b{
+  display:grid; place-items:center; min-width:180px; padding:0 18px;
+  background:rgba(13,27,48,.72); border:1px solid rgba(255,248,239,.26);
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+  color:#fff8ef; font-size:12.5px; font-weight:600; letter-spacing:.1em;
+  text-transform:uppercase; white-space:nowrap;
+}
+.rbtn{
+  display:grid; place-items:center; width:42px; height:38px; padding:0; flex:none;
+  cursor:pointer; color:#fff8ef; font:inherit;
+  background:rgba(13,27,48,.72); border:1px solid rgba(255,248,239,.26);
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+  transition:border-color .15s, background .15s;
+}
+.rbtn:hover, .rbtn:focus-visible, .rout:hover, .rout:focus-visible{
+  background:rgba(13,27,48,.9); border-color:rgba(229,175,105,.75); outline:none;
+}
+.rbtn--prev svg{transform:rotate(180deg)}
+.rout{
+  padding:0 16px; height:38px; margin-left:6px; cursor:pointer; font:inherit;
+  background:rgba(229,175,105,.92); border:1px solid rgba(229,175,105,.92);
+  color:var(--navy); font-size:12px; font-weight:700; letter-spacing:.08em;
+  text-transform:uppercase; white-space:nowrap;
+  transition:border-color .15s, background .15s;
+}
+.rout:hover, .rout:focus-visible{background:#f0bd79; color:var(--navy)}
+/* On the narrow layout the flat's card is DOCKED to the foot of the window
+   - a column beside the room is not a layout a phone has - so the bar goes
+   to the top instead, under the header, where the only thing it covers is
+   ceiling. */
+@media (max-width:760px){
+  #roombar{top:calc(var(--head-h) + 10px); bottom:auto; gap:6px}
+  #roomhint{top:calc(var(--head-h) + 56px); bottom:auto; font-size:10px;
+    padding:5px 10px; max-width:88vw; white-space:normal; text-align:center}
+  #roombar b{min-width:92px; padding:0 10px; font-size:11px; letter-spacing:.06em}
+  .rbtn{width:36px; height:34px}
+  .rout{height:34px; padding:0 11px; font-size:10.5px; margin-left:4px}
+  .rdot span{font-size:11px}
+  @keyframes roombar-in{from{opacity:0; transform:translate(-50%, -10px)} to{opacity:1; transform:translate(-50%, 0)}}
+}
+@media (prefers-reduced-motion:reduce){
+  .rdot, .rdot i, .rdot span{transition:none}
+  #roombar{animation:none}
+}
+
+/* The flat's card STAYS inside a room (the user, 2026-10-19: "when i am
+   inside flat dont hide card from left"). It was faded out at first, on
+   the argument that the fourth step is a photograph and type over a third
+   of it is type over the thing somebody walked in to see - but the card is
+   what the whole walk is about: the flat, its price and the way to book
+   it, which is exactly what a visitor standing in the living room wants to
+   hand. So the room is framed around it instead, and the scrim it reads
+   against stays where it is. */
+
+.tcard{
+  display:block; width:100%; text-align:left; cursor:pointer; color:#fff8ef;
+  background:rgba(13,27,48,.62); border:1px solid rgba(255,248,239,.26);
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+  padding:0; font:inherit; overflow:hidden;
+  transition:border-color .15s, background .15s;
+}
+.tcard:hover, .tcard:focus-visible{
+  background:rgba(13,27,48,.82); border-color:rgba(229,175,105,.75); outline:none;
+}
+/* the plan on top, as big as the card is wide. The two renders are not the
+   same shape - one landscape, one portrait - so it is `contain` on a fixed
+   box rather than a fixed aspect.
+   The box pays for the gap above it: standing the cards down off the header
+   with the old 118 px thumbnails pushed `Back to the street` onto the hint
+   bar. */
+.tcard img{
+  display:block; width:100%; height:90px; object-fit:contain;
+  padding:9px 9px 3px; background:rgba(255,248,239,.05);
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.45));
+}
+.tcard > span{display:block; padding:8px 12px 10px}
+.tcard .n, .tcard .m, .tcard .p{display:block}
+.tcard .n{font-size:13.5px; font-weight:600; letter-spacing:.02em}
+.tcard .m{font-size:11px; color:rgba(255,248,239,.68); margin-top:3px}
+.tcard .p{font-size:12px; margin-top:5px; color:#e5af69; font-weight:600}
+.tcard .p .gone{color:rgba(255,248,239,.5); font-weight:400}
+/* ------------------------------------------- the open flat's own card
+   The third step. A click on the floor view brings the camera down onto one
+   unit, and this takes the four type cards' place in the same column: the
+   plate fills the display here, and a second panel beside the cards would be
+   a second panel laid over flats somebody is looking at.
+
+   It spans both of the rail's columns, so it starts on exactly the line the
+   first card started on - which is the line the scene lays the storey's top
+   edge against (`tellInset` measures `.tcard, .fpanel`), so swapping one for
+   the other does not walk the building up or down the window.
+
+   Same glass as the cards, because it is the same column of the same view. */
+.fpanel{
+  grid-column:1 / -1; color:#fff8ef;
+  background:rgba(13,27,48,.66); border:1px solid rgba(255,248,239,.26);
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+  padding:14px 16px 16px;
+  animation:fpin .34s cubic-bezier(.2,.7,.3,1) both;
+}
+@keyframes fpin{ from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none} }
+@media (prefers-reduced-motion:reduce){ .fpanel{animation:none} }
+
+/* the type's plan beside the three numbers that are this FLAT's, not the
+   type's: the plan is what the flat looks like, the column beside it is what
+   this one costs */
+.fpanel .fphead{display:flex; gap:14px; align-items:center}
+.fpanel .fphead img{
+  width:92px; height:92px; flex:0 0 auto; object-fit:contain;
+  padding:7px; background:rgba(255,248,239,.05);
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.45));
+}
+.fpanel .fphead > div{min-width:0}
+.fpanel .st{
+  display:inline-block; padding:4px 9px; font-size:9.5px; font-weight:600;
+  letter-spacing:.16em; text-transform:uppercase;
+}
+/* the picker's three status tints are mixed for paper; over the glass they
+   go to the pure colour and the wash carries the tone */
+.fpanel .st-available{background:rgba(96,186,135,.2); color:#8fe0b4}
+.fpanel .st-reserved{background:rgba(229,175,105,.2); color:#f0c489}
+.fpanel .st-sold{background:rgba(255,248,239,.14); color:rgba(255,248,239,.62)}
+.fpanel .n{
+  display:block; margin-top:9px; font-size:13px; font-weight:600;
+  letter-spacing:.03em; color:rgba(255,248,239,.78);
+}
+.fpanel .sub{display:none; font-size:11px; color:rgba(255,248,239,.6); margin-top:2px}
+.fpanel .ar{display:block; font-size:2rem; font-weight:600; letter-spacing:-.03em; line-height:1.05}
+.fpanel .ar i{font-style:normal; font-size:.38em; font-weight:500; margin-left:5px;
+  color:rgba(255,248,239,.6); letter-spacing:.04em}
+
+.fpanel dl{display:grid; grid-template-columns:auto 1fr; margin:14px 0 0; font-size:12.5px}
+.fpanel dt{
+  padding:7px 0; border-top:1px solid rgba(255,248,239,.14);
+  font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; font-weight:600;
+  color:rgba(255,248,239,.55);
+}
+.fpanel dd{
+  margin:0; padding:7px 0; text-align:right; font-weight:500;
+  border-top:1px solid rgba(255,248,239,.14);
+}
+.fpanel .fpprice{
+  margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,248,239,.26);
+  display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+}
+.fpanel .fpprice b{font-size:1.5rem; font-weight:600; letter-spacing:-.025em; color:#e5af69}
+.fpanel .fpprice span{font-size:11.5px; color:rgba(255,248,239,.6)}
+/* One thing to do, across the card. `Walk through it` stood beside it and
+   was taken out: the visitor is already looking at the flat in 3D, and the
+   tour opens the ONE modelled unit whichever flat was clicked, so it offered
+   to take them off their own flat and onto a different one. */
+.fpanel .fpact{display:flex; gap:1px; margin-top:14px}
+.fpanel .fpact .btn{flex:1}
+/* The arrows walk the ROW along, and there is no row in view with one flat
+   open - the way on from here is back out. */
+body.floorview.flatview .planpager{display:none}
+
+@media (max-width:760px){
+  #typerail{width:min(100%,360px); max-height:min(66vh,480px); gap:8px}
+  /* no corner to write on here - the cards lie across the top of the plate */
+  #floorlabel{display:none}
+  #typerail .thead{margin-top:clamp(8px,3vh,22px)}
+  .tcard img{height:92px; padding:8px 8px 3px}
+  .tcard > span{padding:8px 10px 10px}
+  .tcard .n{font-size:12.5px}
+  /* The card lies ACROSS the window here rather than beside it, and the
+     flat opens under it (`tellInset` hands the scene the panel's bottom
+     edge on this layout) - so every row of it is a row off the picture.
+     It is cut to what cannot be left out: the plan, what it is, what it
+     costs and the two things to do about it. The table of facts goes,
+     and the one line of it worth keeping - which way the flat faces -
+     comes back up beside the type. */
+  /* ...and it is docked to the FOOT of the window, so the flat has the
+     whole of the top of it. `#hero` centres its column; `margin-top:auto`
+     in a centred flex column is what drops it to the bottom instead. The
+     scene is told how much of the foot that takes (`LP.setFoot`) and
+     frames the flat in what is above. */
+  body.floorview.flatview #hero .wrap{margin-top:auto}
+  body.floorview.flatview #typerail .thead{margin-top:0}
+  body.floorview.flatview #typerail{max-height:none}
+  .fpanel{padding:11px 12px 12px}
+  /* ...and the type's plan goes altogether. Every row of this card is a
+     row off the picture here, and the picture IS the flat: a thumbnail of
+     the plan under a 3D cutaway of the same flat is the one thing on the
+     card that is already on the screen. */
+  .fpanel .fphead img{display:none}
+  .fpanel .fphead{gap:11px}
+  .fpanel .n{margin-top:7px; font-size:12.5px}
+  .fpanel .sub{display:block}
+  .fpanel .ar{font-size:1.6rem}
+  .fpanel dl{display:none}
+  .fpanel .fpprice{margin-top:11px; padding-top:10px}
+  .fpanel .fpprice b{font-size:1.25rem}
+  .fpanel .fpact{margin-top:11px}
+}
+
+/* The boot veil, scoped to the hero rather than the window.
+ *
+ * One flat blue, at the user's word. It used to carry the hero's own first
+ * frame (`hero-poster.webp`, captured by tools/poster.cjs) so that the veil
+ * lifting was a cross-fade from the building to the same building, now
+ * live; the picture and the wash that kept the progress line legible over
+ * it are both off. The poster is still in web/ if it is ever wanted back. */
+#boot{
+  position:absolute; inset:0; z-index:5; display:grid; place-items:center;
+  background:var(--navy);
+  color:var(--on-navy); text-align:center; padding:24px; transition:opacity .6s;
+}
+#boot.gone{opacity:0; pointer-events:none}
+#boot .t{font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--on-navy-dim)}
+#boot .b{width:180px; height:1px; background:var(--on-navy-line); margin:18px auto 0; overflow:hidden}
+#boot .b i{display:block; height:100%; width:0; background:var(--amber); transition:width .3s}
+#boot .err{max-width:460px; margin-top:18px; color:var(--on-navy-dim); font-size:12.5px; line-height:1.6}
+#boot .err b{color:var(--on-navy)}
+
+/* ----------------------------------------------- cells: the hairline grid
+   Every group of equal blocks on the page is one of these: a 1px gap over
+   a line-coloured bed, so the blocks are ruled apart instead of floating. */
+.cells{display:grid; gap:1px; background:var(--line); border:1px solid var(--line)}
+.cells>*{background:var(--cream); padding:clamp(22px,2.3vw,32px); min-width:0}
+.sec--paper .cells>*{background:var(--paper-2)}
+.sec--navy .cells{background:var(--on-navy-line); border-color:var(--on-navy-line)}
+.sec--navy .cells>*{background:var(--navy)}
+.cells-2{grid-template-columns:repeat(2,1fr)}
+.cells-3{grid-template-columns:repeat(3,1fr)}
+.cells-4{grid-template-columns:repeat(4,1fr)}
+.cells-5{grid-template-columns:repeat(5,1fr)}
+.cells-6{grid-template-columns:repeat(6,1fr)}
+@media (max-width:1100px){ .cells-5,.cells-6{grid-template-columns:repeat(3,1fr)} }
+@media (max-width:980px){ .cells-3,.cells-4{grid-template-columns:repeat(2,1fr)} }
+@media (max-width:640px){
+  .cells-2,.cells-3,.cells-4,.cells-5,.cells-6{grid-template-columns:1fr}
+}
+
+.cell h3{font-size:1.05rem; text-transform:uppercase; letter-spacing:.005em; margin:16px 0 10px}
+.cell p{color:var(--ink-70); font-size:15px}
+.sec--navy .cell p{color:var(--on-navy-dim)}
+.ico{width:28px; height:28px; color:var(--amber-700); display:block}
+.sec--navy .ico{color:var(--amber)}
+.ico svg{width:28px; height:28px}
+
+.split{display:grid; grid-template-columns:repeat(12,1fr); column-gap:var(--gap); row-gap:40px; align-items:start}
+.split>*{min-width:0}
+.split>*:not(.rules){grid-column:1/span 5}
+.split>*:not(.rules)~*:not(.rules){grid-column:7/-1}
+@media (max-width:900px){
+  .split>*:not(.rules), .split>*:not(.rules)~*:not(.rules){grid-column:1/-1}
+}
+
+/* ------------------------------------------------------------ numbers */
+#numbers{background:var(--navy); color:var(--on-navy); position:relative; z-index:1}
+#numbers .cells{border-left:0; border-right:0}
+.nums .k{font-size:clamp(1.9rem,3vw,2.9rem); font-weight:600; letter-spacing:-.02em; line-height:1}
+.nums .k small{font-size:.42em; font-weight:500; color:var(--amber); margin-left:6px}
+.nums .k.sm{font-size:clamp(1.05rem,1.5vw,1.4rem); line-height:1.25; text-transform:uppercase}
+.nums .l{margin-top:12px; font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--on-navy-dim)}
+.nums .hi{color:var(--amber)}
+
+/* ------------------------------------------------------------ location */
+.walk{display:flex; align-items:center; gap:14px; padding:18px 20px !important}
+.walk svg{width:19px; height:19px; color:var(--amber-700); flex:0 0 auto}
+.walk .n{font-size:12.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase}
+.walk .m{margin-left:auto; font-size:13px; color:var(--ink-50); white-space:nowrap; font-variant-numeric:tabular-nums}
+.mapcard{
+  border:1px solid var(--line); min-height:240px; position:relative; overflow:hidden;
+  display:grid; place-items:center; text-align:center; padding:34px; margin-bottom:18px;
+  background:var(--paper);
+}
+/* a street grid stands in until a real map is dropped in */
+.mapcard::before{
+  content:""; position:absolute; inset:0; opacity:.5; transition:opacity .25s;
+  background:
+    repeating-linear-gradient(to right, transparent 0 53px, var(--hair) 53px 54px),
+    repeating-linear-gradient(to bottom, transparent 0 53px, var(--hair) 53px 54px),
+    linear-gradient(118deg, transparent calc(50% - 7px), rgba(29,53,89,.09) calc(50% - 7px) calc(50% + 7px), transparent calc(50% + 7px));
+}
+.mapcard:hover::before{opacity:.85}
+.mapcard>div{position:relative}
+.mapcard .pin{background:var(--paper)}
+.mapcard .pin{width:46px; height:46px; border:1px solid var(--line); color:var(--amber-700); display:grid; place-items:center; margin:0 auto 18px}
+.mapcard .addr{font-size:14px; font-weight:600; letter-spacing:.1em; text-transform:uppercase}
+.mapcard .sm{color:var(--ink-50); font-size:11px; letter-spacing:.16em; text-transform:uppercase; margin-top:9px}
+
+/* ------------------------------------------------- the filter's controls
+   The chips, the sliders and the count the hero band is built from. The
+   grid they used to filter is no longer on the page. */
+.filters{
+  display:flex; flex-wrap:wrap; gap:18px 30px; align-items:flex-end;
+  border:1px solid var(--line); padding:22px 24px; margin-top:38px; background:var(--paper);
+}
+.fld{display:flex; flex-direction:column; gap:10px; min-width:0}
+.fld>span{font-size:10.5px; letter-spacing:.17em; text-transform:uppercase; color:var(--ink-50); font-weight:600}
+.chips{display:flex; gap:-1px; flex-wrap:wrap}
+.chip{
+  border:1px solid var(--line); background:transparent; margin-right:-1px;
+  padding:9px 16px; cursor:pointer; white-space:nowrap; transition:.16s;
+  font-size:10.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
+}
+.chip:hover{background:rgba(29,53,89,.06)}
+.chip[aria-pressed="true"]{background:var(--navy); color:var(--on-navy); border-color:var(--navy); position:relative; z-index:1}
+.rng{display:flex; align-items:center; gap:14px; height:37px}
+.rng input[type=range]{
+  -webkit-appearance:none; appearance:none; width:clamp(110px,14vw,180px); height:1px;
+  background:var(--line); outline:none;
+}
+.rng input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none; width:13px; height:13px; background:var(--navy); cursor:pointer;
+}
+.rng input[type=range]::-moz-range-thumb{width:13px; height:13px; background:var(--navy); border:0; border-radius:0; cursor:pointer}
+.rng output{font-variant-numeric:tabular-nums; font-size:13.5px; font-weight:600; min-width:7ch}
+.fld--grow{margin-left:auto; align-items:flex-end}
+#count{font-size:10.5px; letter-spacing:.17em; text-transform:uppercase; color:var(--ink-50); font-weight:600}
+#count b{color:var(--ink)}
+
+/* ----------------------------------------------------------- amenities */
+.finish{
+  margin-top:1px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  background:var(--amber); color:var(--navy); padding:20px 24px;
+  font-size:12px; font-weight:600; letter-spacing:.13em; text-transform:uppercase;
+}
+.finish svg{flex:0 0 auto}
+
+/* -------------------------------------------------------------- prices */
+.pcard{text-align:left; cursor:pointer; border:0; background:var(--cream); transition:background .18s}
+.sec--paper .pcard{background:var(--paper-2)}
+.pcard:hover{background:var(--paper)}
+.pcard .ty{font-size:10.5px; font-weight:600; letter-spacing:.17em; text-transform:uppercase; color:var(--ink-50)}
+.pcard .pr{font-size:clamp(1.5rem,2.3vw,2rem); font-weight:600; letter-spacing:-.025em; margin-top:14px}
+.pcard .pr em{font-style:normal; font-size:.5em; font-weight:500; color:var(--ink-50); margin-right:7px; letter-spacing:.1em; text-transform:uppercase}
+.pcard .lf{margin-top:16px; font-size:10.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--ok)}
+.pcard .lf.none{color:var(--ink-50)}
+
+.pay .tag{display:block; font-size:10.5px; font-weight:600; letter-spacing:.17em; text-transform:uppercase; color:var(--amber-700); margin-bottom:16px}
+.pay h3{font-size:1.05rem; text-transform:uppercase; margin-bottom:12px}
+.pay p{font-size:15px; color:var(--ink-70)}
+.pay ul{margin:14px 0 0; padding-left:0; list-style:none; color:var(--ink-70); font-size:13.5px}
+.pay li{padding:7px 0; border-top:1px solid var(--hair)}
+
+.calc{
+  margin-top:1px; background:var(--navy); color:var(--on-navy); padding:clamp(26px,3vw,44px);
+  display:grid; grid-template-columns:7fr 5fr; gap:clamp(26px,3.4vw,54px); align-items:center;
+}
+@media (max-width:860px){ .calc{grid-template-columns:1fr} }
+.calc h3{font-size:clamp(1.25rem,2vw,1.7rem); text-transform:uppercase}
+.calc .f{margin-top:26px; display:grid; gap:24px}
+.calc label{display:block; font-size:10.5px; letter-spacing:.17em; text-transform:uppercase; color:var(--on-navy-dim)}
+.calc .lrow{display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:12px}
+.calc .lrow b{font-size:15px; font-weight:600; font-variant-numeric:tabular-nums}
+.calc input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:1px; background:var(--on-navy-line); outline:none}
+.calc input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; width:14px; height:14px; background:var(--amber); cursor:pointer}
+.calc input[type=range]::-moz-range-thumb{width:14px; height:14px; background:var(--amber); border:0; border-radius:0; cursor:pointer}
+.calc .out{border:1px solid var(--on-navy-line); padding:30px 26px; text-align:center}
+.calc .out .big{font-size:clamp(2rem,4vw,2.9rem); font-weight:600; letter-spacing:-.035em; color:var(--amber); line-height:1}
+.calc .out .lb{font-size:10.5px; letter-spacing:.17em; text-transform:uppercase; color:var(--on-navy-dim); margin-bottom:16px}
+.calc .out .sm{margin-top:18px; font-size:12.5px; color:var(--on-navy-dim); line-height:1.6}
+.urgency{
+  margin-top:34px; padding-top:26px; border-top:1px solid var(--line);
+  display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;
+  font-size:12px; font-weight:600; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-70);
+}
+.urgency b{color:var(--amber-700)}
+
+/* ------------------------------------------------------------- gallery */
+.tabs{display:flex; flex-wrap:wrap; margin-top:34px}
+.grid-g{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:24px}
+@media (max-width:860px){ .grid-g{grid-template-columns:repeat(2,1fr)} }
+@media (max-width:540px){ .grid-g{grid-template-columns:1fr} }
+.shot{aspect-ratio:4/3; position:relative; overflow:hidden; background:var(--cream); cursor:pointer; display:grid; place-items:center}
+.shot img{width:100%; height:100%; object-fit:cover; transition:transform .6s cubic-bezier(.2,.7,.3,1)}
+.shot:hover img{transform:scale(1.04)}
+.shot.plate{
+  cursor:default; text-align:center; padding:24px; color:var(--ink-50);
+  background:
+    repeating-linear-gradient(135deg, transparent 0 9px, rgba(29,53,89,.045) 9px 10px),
+    var(--paper);
+}
+.shot.plate .cap{font-size:11px; font-weight:600; letter-spacing:.17em; text-transform:uppercase; color:var(--ink)}
+.shot.plate .nm{font-size:10.5px; letter-spacing:.12em; color:var(--ink-50); opacity:.7; margin-top:10px}
+.shot.plate svg{opacity:.4; margin-bottom:14px}
+#lightbox{position:fixed; inset:0; z-index:60; background:rgba(13,27,48,.95); display:none; place-items:center; padding:clamp(16px,4vw,52px)}
+#lightbox.on{display:grid}
+#lightbox img{max-width:100%; max-height:86vh}
+#lightbox .x{position:absolute; top:clamp(12px,2.2vw,26px); right:clamp(12px,2.2vw,26px); width:42px; height:42px; border:1px solid var(--on-navy-line); background:transparent; color:#fff8ef; cursor:pointer; font-size:17px}
+
+/* ----------------------------------------------------------- developer */
+.logos{display:flex; flex-wrap:wrap; gap:1px; margin-top:38px; background:var(--on-navy-line); border:1px solid var(--on-navy-line)}
+.logos span{
+  flex:1 1 180px; background:var(--navy); padding:20px 24px; text-align:center;
+  font-size:10.5px; font-weight:600; letter-spacing:.17em; text-transform:uppercase; color:var(--on-navy-dim);
+}
+.bigstats .k{font-size:clamp(2.2rem,4vw,3.3rem); font-weight:600; letter-spacing:-.035em; line-height:1; color:var(--amber)}
+.bigstats .l{margin-top:14px; font-size:10.5px; letter-spacing:.17em; text-transform:uppercase; color:var(--on-navy-dim)}
+
+/* ------------------------------------------------------------- questions */
+.faq{border-top:1px solid var(--line); background:var(--cream); position:relative}
+.faq details{border-bottom:1px solid var(--hair)}
+.faq summary{
+  list-style:none; cursor:pointer; padding:22px 44px 22px 0; position:relative;
+  font-size:clamp(13px,1.2vw,15px); font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{
+  content:""; position:absolute; right:6px; top:50%; width:11px; height:1.5px;
+  background:var(--amber-700); transform:translateY(-50%);
+}
+.faq summary::before{
+  content:""; position:absolute; right:11px; top:50%; width:1.5px; height:11px;
+  background:var(--amber-700); transform:translateY(-50%); transition:transform .25s;
+}
+.faq details[open] summary::before{transform:translateY(-50%) scaleY(0)}
+.faq .ans{padding:0 56px 24px 0; color:var(--ink-70); font-size:15px}
+
+/* ------------------------------------------------------------ last call */
+#contacts{background:var(--navy-900); color:var(--on-navy); position:relative; overflow:hidden}
+#contacts::before{
+  content:""; position:absolute; inset:auto -8% -40% auto; width:min(760px,80vw); aspect-ratio:1;
+  background:radial-gradient(circle,rgba(229,175,105,.2),transparent 66%); pointer-events:none;
+}
+.ticks{margin-top:30px; display:grid; border-top:1px solid var(--on-navy-line); background:var(--navy-900); position:relative}
+.ticks div{display:flex; gap:14px; align-items:flex-start; padding:15px 0; border-bottom:1px solid var(--on-navy-line); font-size:14.5px; color:var(--on-navy-dim)}
+.ticks svg{color:var(--amber); flex:0 0 auto; margin-top:3px}
+
+form.lead-form{background:#fdf7ee; color:var(--ink); padding:clamp(24px,2.8vw,36px); display:grid; gap:16px}
+form.lead-form .f{display:grid; gap:8px; min-width:0}
+form.lead-form label{font-size:10.5px; letter-spacing:.17em; text-transform:uppercase; color:var(--ink-50); font-weight:600}
+form.lead-form input, form.lead-form select{
+  border:1px solid var(--line); background:transparent; padding:14px 15px; font-size:15px; width:100%;
+  transition:border-color .16s;
+}
+form.lead-form input:focus, form.lead-form select:focus{outline:none; border-color:var(--navy)}
+form.lead-form input[aria-invalid="true"]{border-color:#a8452f}
+form.lead-form .err{color:#a8452f; font-size:12px}
+form.lead-form .btn{width:100%; margin-top:6px; padding-block:17px}
+form.lead-form .fine{font-size:10.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-50); text-align:center; display:flex; gap:8px; justify-content:center; align-items:center}
+.done{display:none; text-align:center; padding:clamp(30px,4vw,56px) 26px; background:#fdf7ee; color:var(--ink)}
+.done.on{display:block}
+form.lead-form.off{display:none}
+.done .ok{width:58px; height:58px; border:1px solid var(--ok); color:var(--ok); display:grid; place-items:center; margin:0 auto 20px}
+.done h3{font-size:1.2rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:12px}
+.done p{color:var(--ink-70)}
+
+/* --------------------------------------------------------------- footer */
+#foot{background:var(--navy-900); color:var(--on-navy-dim); padding-block:clamp(44px,5vw,70px) 26px; font-size:14px; position:relative; z-index:1; border-top:1px solid var(--on-navy-line)}
+#foot .top{display:grid; grid-template-columns:1.4fr 1fr 1fr 1fr; gap:clamp(22px,3vw,44px)}
+@media (max-width:900px){ #foot .top{grid-template-columns:repeat(2,1fr)} }
+@media (max-width:560px){ #foot .top{grid-template-columns:1fr} }
+#foot .logo{color:var(--on-navy)}
+#foot .logo .wm small{color:var(--on-navy-dim)}
+#foot h4{font-size:10.5px; letter-spacing:.17em; text-transform:uppercase; color:var(--on-navy); margin-bottom:20px; font-weight:600}
+#foot a:hover{color:var(--amber)}
+#foot ul{list-style:none; margin:0; padding:0; display:grid}
+#foot li{padding:8px 0; border-top:1px solid var(--on-navy-line)}
+#foot .ka{font-family:'Noto Sans Georgian',Jost,sans-serif; margin-top:10px; display:block}
+#foot .bar{
+  margin-top:clamp(30px,4vw,52px); padding-top:22px; border-top:1px solid var(--on-navy-line);
+  display:flex; flex-wrap:wrap; gap:12px 30px; justify-content:space-between; font-size:11.5px; line-height:1.7;
+}
+#foot .bar p{max-width:70ch}
+
+/* what a pointer gets and a finger does not, and the other way round */
+.narrow{display:none}
+@media (max-width:760px){
+  .wide{display:none}
+  .narrow{display:inline}
+}
+
+/* ------------------------------------------------- reveal on scroll */
+@media (prefers-reduced-motion:no-preference){
+  .rv{opacity:0; transform:translateY(14px); transition:opacity .6s cubic-bezier(.2,.7,.3,1), transform .6s cubic-bezier(.2,.7,.3,1)}
+  .rv.in{opacity:1; transform:none}
+}
+
+/* ---------------------------------------------------------- language
+   Two words, not a flag: a flag is a country and this is a language. The
+   one that is on is not a button - there is nothing to press - so it is
+   marked rather than outlined, and the pair sits on the same baseline as
+   the phone number beside it. */
+.lang{display:flex; align-items:center; gap:2px; margin-left:4px}
+.lang button{
+  background:none; border:0; padding:5px 7px; cursor:pointer; font:inherit;
+  font-size:11px; font-weight:600; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-50); transition:color .16s;
+}
+#head.onhero .lang button{color:var(--on-navy-dim)}
+.lang button:hover{color:var(--ink)}
+#head.onhero .lang button:hover{color:var(--on-navy)}
+.lang button[aria-current=true]{color:var(--ink); cursor:default; text-decoration:underline;
+  text-underline-offset:4px; text-decoration-thickness:1.5px}
+#head.onhero .lang button[aria-current=true]{color:var(--on-navy)}
+@media (max-width:900px){
+  .lang{margin-left:auto; margin-right:2px}
+  .lang button{padding:5px 5px}
+}

@@ -1,0 +1,41 @@
+<!doctype html><meta charset="utf-8"><title>glass compile probe</title>
+<body style="background:#111;color:#ddd;font:12px monospace">
+<pre id="out">...</pre>
+<script type="importmap">
+{"imports":{
+ "three":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.webgpu.js",
+ "three/webgpu":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.webgpu.js",
+ "three/tsl":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.tsl.js",
+ "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three/webgpu';
+import { makeSky, skyEquirect } from './sky.js';
+import { buildMaterials } from './materials.js';
+const out = document.getElementById('out');
+const log = (s)=>{ out.textContent += '\n'+s; console.log(s); };
+const renderer = new THREE.WebGPURenderer({antialias:false});
+renderer.setSize(256,256); document.body.appendChild(renderer.domElement);
+await renderer.init();
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50,1,0.1,100); camera.position.z = 4;
+const SUN_DIR = new THREE.Vector3(0.456,0.848,0.270).normalize();
+const skyTex = skyEquirect(THREE,renderer,makeSky({sunDir:SUN_DIR,disc:false}),256,128).texture;
+scene.environment = new THREE.PMREMGenerator(renderer).fromEquirectangular(skyTex).texture;
+scene.add(new THREE.DirectionalLight(0xffffff,3));
+const { materials } = buildMaterials(THREE,{sunDir:SUN_DIR,sunColor:new THREE.Color(1,.95,.88),maps:{sky:skyTex}});
+const names = ['glass_window','glass_slot','glass_shop','car_glass','glass_lit','plaster_dark','asphalt','rail_balcony'];
+const geo = new THREE.BoxGeometry(1,1,1);
+for (const n of names){
+  const mesh = new THREE.Mesh(geo, materials[n]);
+  const s = new THREE.Scene(); s.environment = scene.environment; s.add(mesh); s.add(new THREE.DirectionalLight(0xffffff,3));
+  const t0 = performance.now();
+  await renderer.compileAsync(s, camera);
+  const t1 = performance.now();
+  let len = 0;
+  try { const sh = await renderer.debug.getShaderAsync(s, camera, mesh); len = sh.fragmentShader.length;
+        window['__wgsl_'+n] = sh.fragmentShader; } catch(e){ len = -1; }
+  log(n.padEnd(16)+' compile '+(t1-t0).toFixed(0).padStart(7)+' ms   wgsl '+len+' chars');
+}
+log('done');
+</script>

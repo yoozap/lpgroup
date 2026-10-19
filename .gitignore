@@ -1,0 +1,13 @@
+# Rig output. Every tool in tools/ writes its captures here; they are
+# regenerated on demand and are far too heavy to version. The two goldens
+# are the exception - they are the look this build is measured against.
+perf-shots/*
+!perf-shots/golden-s1.png
+!perf-shots/golden-s2.png
+
+# Appended to by the perf rig on every run.
+tools/perf-log.jsonl
+
+__pycache__/
+*.pyc
+.DS_Store

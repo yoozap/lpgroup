@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Public Market — render lab</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230c0d10'/%3E%3Crect x='7' y='9' width='8' height='16' fill='%23e9e7e2'/%3E%3Crect x='17' y='13' width='8' height='12' fill='%239a968e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="./scene.css">
+</head>
+<body>
+<div id="stage">
+  <div id="frame" class="cmp">
+    <img id="ref" src="./reference.jpg" alt="reference photograph">
+    <div id="tags"><span id="tagL">Reference</span><span id="tagR">Three.js &middot; WebGPU</span></div>
+    <div id="bar"><div id="knob">&#10094;&#10095;</div></div>
+  </div>
+</div>
+
+<div id="hud" hidden>
+  <h1>Public Market</h1>
+  <p id="sub">Street &middot; the solved shot</p>
+  <div class="seg" role="group" aria-label="scene">
+    <button id="s_1" aria-pressed="true">Scene 1</button>
+    <button id="s_2" aria-pressed="false">Scene 2</button>
+  </div>
+  <div class="seg" role="group" aria-label="camera mode">
+    <button id="m_hero" aria-pressed="true">Hero</button>
+    <button id="m_top" aria-pressed="false">Top</button>
+    <button id="m_row" aria-pressed="false" hidden>Row</button>
+    <button id="m_orbit" aria-pressed="false">Orbit</button>
+    <button id="m_fly" aria-pressed="false">Fly</button>
+  </div>
+  <div class="row" id="r_plan" hidden><label for="t_plan">Reference plan</label><input class="sw" type="checkbox" id="t_plan"></div>
+  <div class="row" id="r_mirror" hidden><label for="t_mirror">Mirror the plan</label><input class="sw" type="checkbox" id="t_mirror" checked></div>
+  <div class="row" id="r_hide" hidden><label for="t_hide">Hide our furniture</label><input class="sw" type="checkbox" id="t_hide"></div>
+  <div class="row"><label for="t_dev">Developer mode</label><input class="sw" type="checkbox" id="t_dev"></div>
+  <div class="row"><label for="t_cmp">Compare wipe</label><input class="sw" type="checkbox" id="t_cmp" checked></div>
+  <div class="row"><label for="t_ao">Ambient occlusion</label><input class="sw" type="checkbox" id="t_ao" checked></div>
+  <div class="row"><label for="t_grade">Film grade</label><input class="sw" type="checkbox" id="t_grade" checked></div>
+  <p class="hint" id="hint">Drag the handle to wipe between the photograph and the render.</p>
+  <div class="sep"></div>
+  <div class="row"><span id="fps" title="The page only draws when something moves, so a parked shot reads idle.">—</span><button class="lnk" id="reset">reset shot</button></div>
+</div>
+
+<div id="dev" hidden>
+  <div class="dh">Developer mode</div>
+  <div id="dev_sel">click a piece to select it</div>
+  <div id="dev_pos"></div>
+  <div class="dk">W move &middot; E rotate &middot; R scale &middot; Esc deselect</div>
+  <button class="lnk" id="dev_dump">copy every change</button>
+</div>
+
+<div id="boot">
+  <div>
+    <div class="t" id="bootmsg">starting webgpu</div>
+    <div class="b"><i id="bootbar"></i></div>
+    <div class="err" id="booterr"></div>
+  </div>
+</div>
+
+<link rel="modulepreload" href="./vendor/three/build/three.webgpu.js">
+<link rel="modulepreload" href="./vendor/three/build/three.core.js">
+<!-- three.js is served from this project, not from a CDN. Twenty cross-origin
+     requests - a DNS lookup, a TLS handshake and a round trip each, before a
+     single byte of the model could be asked for - were about a second of
+     every cold boot. The vendored copy is three@0.186.1 with only the module
+     graph this page imports; `web/vendor/three/README.md` says how it was
+     made and how to go back to the CDN. It must be served compressed: it is
+     3.8 MB of unminified JavaScript and about a tenth of that gzipped. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/build/three.webgpu.js",
+    "three/webgpu": "./vendor/three/build/three.webgpu.js",
+    "three/tsl": "./vendor/three/build/three.tsl.js",
+    "three/addons/": "./vendor/three/examples/jsm/"
+  }
+}
+</script>
+
+<!-- The model is fetched here, beside the modules, rather than after app.js
+     has waited for three.js to come down from the CDN - see index.html. -->
+<script>
+window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
+	var o = { loaded: 0, total: 0 };
+	var p = fetch( './scene.glb' ).then( async function ( r ) {
+		if ( ! r.ok ) throw new Error( 'scene.glb ' + r.status );
+		o.total = + ( r.headers.get( 'content-length' ) || 0 );
+		if ( ! r.body ) return r.arrayBuffer();
+		var parts = [], rd = r.body.getReader();
+		for ( ;; ) {
+			var step = await rd.read();
+			if ( step.done ) break;
+			parts.push( step.value ); o.loaded += step.value.byteLength;
+		}
+		var all = new Uint8Array( o.loaded ), at = 0;
+		for ( var i = 0; i < parts.length; i ++ ) { all.set( parts[ i ], at ); at += parts[ i ].byteLength; }
+		return all.buffer;
+	} );
+	p.progress = o;
+	return p;
+} )();
+</script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

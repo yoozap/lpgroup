@@ -1,0 +1,16 @@
+BPG Nino Mtavruli (Regular)
+  bpg_nino_mtavruli_normal.otf, from fonts.ge
+  "BPG-InfoTech free gift by Bessarion Gugushvili by name of
+   Nino Gugushvili-Mikaberidze" - http://bpg.sytes.net
+
+It is a LEGACY Georgian font and that is the whole of why site.css
+declares it the way it does: it draws MTAVRULI CAPITALS at the MKHEDRULI
+code points (U+10D0-10FF) and has nothing at all at the Mtavruli block
+Unicode 11 added (U+1C90-1CBF). So the page keeps its Georgian in
+ordinary lower-case Mkhedruli - which is what copy, search and a screen
+reader want - and the capitals on titles are the font drawing them, not
+the text being changed. Converting the text to real Mtavruli would push
+every title straight off this font and back onto Noto.
+
+Covers all 33 modern letters and the punctuation this page sets in
+titles, except U+00B2 (²) and U+2116 (№), which fall back to Jost.
