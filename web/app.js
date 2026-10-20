@@ -632,7 +632,20 @@ let maps = null, scene2Ready = null, planTex = null;
  * the loader with its Draco decoder, which therefore cannot be disposed
  * when the street is done with it. */
 let sceneMaterials = null, glbLoader = null, glbDraco = null, flatReady = null;
-/* OFF BY DEFAULT since 2026-10-20, after it broke production.
+/* Is the flat's GEOMETRY in the scene? Not "has it been asked for" - the
+ * difference is the whole of the bug the split shipped. Everything that can
+ * put the flat on screen goes through `withFlat`, so there is one place to
+ * be wrong rather than three. With the split off this is true from the
+ * start and `withFlat` is a straight call. */
+let flatIn = false;
+const withFlat = ( fn ) => {
+	if ( flatIn ) return fn();
+	loadFlat().then( fn, fn );        // a flat that fails still opens, empty
+};
+/* ON, since the two holes below were closed - `?glbsplit=0` for the old
+ * single file.
+ *
+ * It was off for one commit after it broke production.
  *
  * Splitting the model is right - it takes the first frame from 9.31 MB to
  * 5.71 - but it changes something the rest of the page assumed: the flat's
@@ -642,10 +655,14 @@ let sceneMaterials = null, glbLoader = null, glbDraco = null, flatReady = null;
  * and the hover arms on a 2.5 s deadline regardless, so the wall parted on
  * a storey with nothing in it.
  *
- * `?glbsplit=1` turns it back on. The arming fix in `floorTest` is in and
- * looks right, but it goes back on by default only once it has been
- * measured on a throttled link rather than argued about. */
-const GLB_SPLIT = __q.get( 'glbsplit' ) === '1';
+ * Two holes, both now closed through `withFlat`: the hover's arming
+ * deadline starts when the flat is IN rather than when the pointer
+ * arrives, and the storey CLICK - which does not have to come through a
+ * hover at all - is gated the same way. Verified by looking at the frames
+ * during the download window on a throttled link, which is the check that
+ * was missing the first time: the timings were measured and the pictures
+ * were not. */
+const GLB_SPLIT = __q.get( 'glbsplit' ) !== '0';
 
 init().catch( ( e ) => {
 	console.error( e );
@@ -1301,7 +1318,7 @@ const compiledPromise = () => scene2Compiled
 async function loadFlat() {
 	// with the split off, the flat came in with the street and `optimise`
 	// has already welded it into `groups.flat`
-	if ( ! GLB_SPLIT ) return true;
+	if ( ! GLB_SPLIT ) { flatIn = true; return true; }
 	if ( flatReady ) return flatReady;
 	flatReady = ( async () => {
 		const t0 = performance.now();
@@ -1331,6 +1348,7 @@ async function loadFlat() {
 		planSetupMaterials();                    // patch what the weld produced
 		/* The flat is the decoder's last customer. */
 		if ( glbDraco ) { glbDraco.dispose(); glbDraco = null; }
+		flatIn = true;
 		console.info( 'show flat: ' + Math.round( tParsed - t0 ) + ' ms to parse, '
 			+ Math.round( performance.now() - tParsed ) + ' ms to fold in, '
 			+ groups.flat.children.length + ' objects' );
@@ -2779,7 +2797,13 @@ function initEmbed() {
 		 * the floor you can see highlighted opened its neighbour. Only fall
 		 * back to a cast if nothing is lit at all. */
 		const storey = floorHot || floorUnder( [ e.clientX, e.clientY ] );
-		if ( storey ) return setScene( 2, true, storey, 'plan' );
+		/* ...and not into an EMPTY floor view. The hover is armed on the
+		 * flat being here, but a click does not have to come through a
+		 * hover - the fallback cast below opens the top floor from
+		 * anywhere on the block - so this is the other way in and it
+		 * needs the same gate. On a slow link the flight takes two
+		 * seconds of the wait with it. */
+		if ( storey ) return withFlat( () => setScene( 2, true, storey, 'plan' ) );
 		const r = dom.getBoundingClientRect();
 		ndc.set( ( e.clientX - r.left ) / r.width * 2 - 1,
 			- ( ( e.clientY - r.top ) / r.height ) * 2 + 1 );
@@ -2787,7 +2811,7 @@ function initEmbed() {
 		const groupsNow = [ groups.main, groups.tower ].filter( Boolean );
 		const hit = ray.intersectObjects( groupsNow, true )
 			.some( h => h.object.isMesh && h.object.visible );
-		if ( hit ) setScene( 2 );
+		if ( hit ) withFlat( () => setScene( 2 ) );
 	} );
 
 	buildFloorMap();
@@ -3127,7 +3151,7 @@ function wireUI() {
 	[ 'hero', 'orbit', 'fly' ].forEach( k =>
 		$( 'm_' + k ).addEventListener( 'click', () => setMode( k ) ) );
 	$( 's_1' ).addEventListener( 'click', () => setScene( 1 ) );
-	$( 's_2' ).addEventListener( 'click', () => setScene( 2 ) );
+	$( 's_2' ).addEventListener( 'click', () => withFlat( () => setScene( 2 ) ) );
 	$( 'm_top' ).addEventListener( 'click', () => setMode( 'top' ) );
 	$( 'm_row' ).addEventListener( 'click', () => setMode( 'row' ) );
 	on( 't_plan', v => setPlan( v ) );
