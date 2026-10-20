@@ -124,7 +124,16 @@ async function run( how ) {
 	const reached = [];
 	for ( const how of [ 'hover', 'click' ] ) {
 		const { ready, rows } = await run( how );
-		reached.push( { how, ok: rows.some( r => r.shown ) } );
+		/* ...and reached it by the route under test. `shown` is true for a
+		 * parted storey OR for scene 2, and the click route sweeps the
+		 * pointer to find the facade - which arms the hover on the way. So
+		 * a click that never fired would still look "reached" on the
+		 * hover's evidence, and the gate it is there to test would go
+		 * unexercised while the run printed PASS. Each route is held to
+		 * its own signal. */
+		reached.push( { how, ok: how === 'click'
+			? rows.some( r => r.inScene2 )
+			: rows.some( r => r.parted ) } );
 		console.log( `\n${ how.toUpperCase() } at ${ MBPS } Mbps${ Q ? '  ?' + Q : '' }   veil lifted at ${ ready } ms` );
 		console.log( '   t ms   flat meshes   armed  hot  scene2   showing the flat?' );
 		for ( const r of rows ) {
