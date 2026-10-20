@@ -272,12 +272,17 @@ frame by 4 ms, halving the pixels halved it.
 
 | | before | now |
 |---|---|---|
-| boot to the first frame | 11.1 s cold / ~5 s warm | **2.1 s** |
+| boot to the first frame | 11.1 s cold / ~5 s warm | **1.96 s** |
 | a frame while the camera moves | 51.5 ms | **26.5 ms** |
 | a frame while nothing moves | 51.5 ms, sixty times a second | **not drawn at all** |
 | worst frame in the Scene 2 move | 18.7 s | **55 ms** |
 | bytes before the first frame | ~30 MB | **12.5 MB** |
 | `web/scene.glb` | 18.9 MB | **8.3 MB** |
+
+(The boot figure is current; the rest of this table is the 2026-10-12 pass
+and the sections below carry what has happened since. The page as it ships
+today is **14.17 MB over 67 requests**, of which `scene.glb` is 9.3 MB on
+the wire - the model has grown with the show flat and is gzipped now.)
 
 Five things do that, and none of them change what a still frame looks like -
 the hero shot after and before differs by 0.5/255 on average, which is the
@@ -345,6 +350,14 @@ quarter) and the pre-pass about 10.
 
 and against the pixel ratio it is very nearly a straight line - about
 **9.7 ms per million pixels**, whatever happens to be in them:
+
+> **Both tables above are superseded.** They were taken before the sky was
+> baked and before the pre-pass stopped building lighting it cannot show.
+> The frame is now **4.0 ms per megapixel plus 6.3 ms that is not pixels at
+> all** - see **Measuring**, which also explains why a cost measured through
+> rAF was never the frame's cost. They are kept because the *stage* ordering
+> still holds and because the ratios between the stages are what the later
+> work was reasoned from.
 
 | pixelRatio | Mpx | ms | fps |
 |---|---|---|---|
@@ -1364,13 +1377,130 @@ lost by a bad patch, so the frame could not afford a higher rung and the
 ladder looked like it was refusing to climb. Check `?bg=` is doing what you
 think before concluding anything about the ladder.
 
-**What a frame costs cannot be measured here, only tried.** `dt` reports the
-display, not the work: a frame that fits comes back at 16.7 ms whether it
-cost 4 ms or 16. Draining the queue after a frame and timing it was built and
-thrown away - the drain's promise resolves on a main thread parked waiting
-for the next rAF, so it timed the *scheduler*: 85-91 ms for a frame the rigs
-measure at 17. Per-pass GPU timestamps do not work on Metal/Dawn either. The
-ladder trying a rung and watching for misses is the only honest signal.
+**What a frame costs cannot be measured on the page's own loop, only tried.**
+`dt` reports the display, not the work: a frame that fits comes back at
+16.7 ms whether it cost 4 ms or 16. Draining the queue after a frame and
+timing it was built and thrown away - the drain's promise resolves on a main
+thread parked waiting for the next rAF, so it timed the *scheduler*:
+85-91 ms for a frame the rigs measure at 17. Per-pass GPU timestamps do not
+work on Metal/Dawn either. Inside `rate()`, the ladder trying a rung and
+watching for misses is still the only honest signal. (From OUTSIDE the loop
+it can be measured, and `tools/fpsmax.cjs` does - see **Measuring**. That
+rig is how the two faults below were found; the ladder itself still cannot
+use it.)
+
+#### A dead end: reading the miss as a bracket instead of a cost
+
+Worth recording because the argument is seductive. The descent aims at
+`STEPS[ prStep ] * sqrt( FRAME_CEIL / dt )`, and `dt` is the display - so if
+the display is quantised, a frame that misses one flip comes back at two
+intervals whether it cost 16.8 ms or 33, and every single miss looks like a
+frame at 1.8x budget. A frame arriving at `k+1` intervals cost somewhere in
+`( k, k+1 ]`, so `dt - iv` is its lower bound and the interval is what to
+divide by.
+
+It was built, and it made the hero **drift downward**: 3.07 Mpx to 2.51 to
+2.07 over ten seconds, where the line it replaced holds 3.07 flat for a
+whole ride.
+
+**The premise is false here.** Pull every per-second median over the ceiling
+out of the rides in the scratchpad and they come back 18.6, 19.1, 22.3,
+24.6, 40.2, 54.8 - a continuous spread, and **not one of thirty-four within
+2.5 ms of a clean 33.3**. This page is not hard-locked to the flip; `dt` is
+an honest cost, and `dt - iv` understates it badly - a 22 ms frame reads as
+5.3 ms of overrun and asks for one rung where it wants two.
+
+There is a second reason it was wrong, which outlives the first: dropping to
+*exactly* the rung that fits leaves the page sitting ON the cliff, missing a
+few frames a second, which the ladder then reads as more evidence and walks
+itself down. The overshoot the original line produces is the margin. Don't
+retry it.
+
+#### The opening is not over when the warm is
+
+A second dead end first, because it is the obvious move and it is wrong.
+`endWarm()` clears `prCap`, the probe clock and the miss window but leaves
+`prStep` wherever the transient pushed it, which is the floor - so give the
+**rung** back too, on the same argument that those frames were not evidence.
+Built, measured, off by default (`?warmrung=1`): it is a blind jump, and it
+lands at the one moment the page is least able to hold it. The instant the
+window closes is the instant misses count as verdicts again, and the opening
+is still noisy either side of any fixed deadline. The restored rung missed
+within the second, the descent that followed pinned `prCap` to the floor and
+doubled `probeWait` to forty seconds, and the hero spent the rest of the ride
+at 1.44 Mpx - where simply climbing from where it stood reached 2.51 and held
+it. Climbing is evidence-led and self-correcting; a jump is neither.
+
+What does work is three things that leave the climbing alone. The window
+ended on the flat's warm, at 2.4 s, and frames do not go
+honest until about 5 - textures still landing, no temporal AA history, and
+every surface the rail brings round the corner drawn for the first time.
+Three descents in seconds 1 to 4, each a verdict, each doubling `probeWait`
+to a minute. It ends on whichever is **later** now, the warm or
+`WARM_FLOOR` (5 s). `?warmfloor=0` ends it with the warm.
+
+And `STALL` - the ceiling above which a frame is a compile or an upload
+rather than evidence - was **200 ms**, chosen when a frame cost 56. At the
+rungs this page runs at, dropping from the top of the ladder to the floor
+saves about 14 ms, so a frame 95 ms over budget *cannot* be a density
+problem: no rung would have fixed it, and reading it as one sent the ladder
+to the floor over a single texture landing. It is four display intervals
+now, which keeps the genuine 25-33 ms misses and throws out the stalls.
+`?stall=` pins it.
+
+And the climb: one rung per `TRY_MS` is right once a rung has been ruled
+out, but from the floor to the top is seven rungs, and twenty-one seconds of
+a first impression spent climbing buys nothing but the certainty that each
+rung held for three whole seconds. Until the first verdict it is `TRY_FAST`
+(700 ms); after one, `TRY_MS` as before.
+
+`?ladder=old` puts all three back at once, so the A/B is one flag rather
+than three and cannot accidentally test two of them - which is how a dead
+end survived two rounds of measurement here before being caught.
+
+**What the three are worth, interleaved, five rounds of a 20 s ride** (four
+usable - one round had the machine taken from it). On a quiet machine:
+almost nothing, and that is the honest answer.
+
+| 20 s of the hero | `?ladder=old` | now |
+|---|---|---|
+| fps | 58.1 | 57.7 |
+| median frame | 16.7 ms | 16.7 ms |
+| p95 | 19.0 ms | **18.8 ms** |
+| frames over 20 ms | 2% | 2% |
+| mean density over the ride | 2.55 Mpx | **2.85 Mpx** |
+
+The fps difference is inside the noise and the density is worth about 12%.
+One of the four rounds had the new arm end on the floor and one had the old
+arm there, which is roughly what this ladder's variance looks like.
+
+The **opening** is where they were aimed and where they read cleanest -
+seconds 1 to 4, past the veil, median over five rounds:
+
+| seconds 1-4 | `?ladder=old` | now |
+|---|---|---|
+| frames drawn | 240 | 240 |
+| median frame | 16.8 ms | **16.6 ms** |
+| p95 | 19.1 ms | **18.8 ms** |
+| density | 1.74 Mpx | **1.94 Mpx** |
+
+Higher in four rounds of five, and never lower by more than noise.
+
+Where they pay is the machine that has something else to do - which is the
+machine a visitor is actually on, and here was this one with another
+session's headless browsers taking the load average to 26:
+
+| the same ride, machine contended | `?ladder=old` | now |
+|---|---|---|
+| fps | 45.0 | **55.7** |
+| median frame | 19.7 ms | **16.8 ms** |
+| p95 | 34.5 ms | **22.4 ms** |
+| frames over 20 ms | 47% | **11%** |
+
+That is what these three are for: none of them makes a fast machine faster,
+all of them stop a slow moment from being read as a verdict about the
+machine. A fast machine has nothing to protect; a loaded one had 47% of its
+frames outside the interval and now has 11%.
 
 **What the still frame spends.** `msPerMpx` - the number the parked hero's
 supersampling budget is divided by - was averaged over moving frames, which
@@ -1531,12 +1661,31 @@ Draco decoder's wasm pair - 22 files, 5.2 MB on disk, nothing else from the
 16 MB package. `starting webgpu` is at **96-216 ms**, and the page has no
 third-party dependency left at all; it works with the network unplugged.
 
-three ships no minified WebGPU build, so this is 3.8 MB of unminified
-JavaScript and it **must be served compressed** - about a tenth of that
-gzipped, which is what the CDN was doing for us. `serve.py` gzips now
-(`three.webgpu.js`: 2.28 MB on disk, 458 KB on the wire), and any real host
-does, but check: uncompressed, vendoring would be heavier than the CDN.
-`web/vendor/three/README.md` has the recipe and the way back.
+three ships no minified WebGPU build, so vendoring it meant 3.74 MB of
+unminified JavaScript. **It is minified here now** - `web/vendor/three-min`,
+built by `tools/min_three.sh`, which runs esbuild over each module of
+`web/vendor/three` one file at a time rather than bundling them, so every
+import specifier survives and the import map is the only thing that
+changed. The source tree stays beside it as what the minified one is cut
+from, and as the recipe for cutting it again after a version bump.
+
+| the vendored library | source | minified |
+|---|---|---|
+| on disk | 3.74 MB | **1.11 MB** |
+| gzipped, whole tree | 818 KB | **359 KB** |
+| `three.webgpu.js` on the wire | 444 KB | **199 KB** |
+
+The bytes matter and the **parse matters more**: it is 2.6 MB less
+JavaScript for the main thread to tokenise before a line of the page runs,
+and in this browser it took `starting webgpu` from 177 ms to 77 and the
+whole boot from 3.5 s to 1.96. The render is untouched, which is the thing
+to check and was checked: Scene 1 differs by **0.283/255** against a
+0.427 noise floor between two captures of the same build, and Scene 2 by
+0.806 against its own 0.996 - both under the noise, i.e. the same picture.
+
+It still **must be served compressed**: 1.11 MB minified is 359 KB
+gzipped, and `serve.py` does it. `web/vendor/three/README.md` has the
+recipe and the way back to the CDN.
 
 | cold boot, same machine and window | before today | now |
 |---|---|---|
@@ -1544,6 +1693,56 @@ does, but check: uncompressed, vendoring would be heavier than the CDN.
 | three.js on the wire | 30..474 ms, 20 requests, another host | 5..40 ms, same host |
 | the model on the wire | 1233..1246 ms | **12..70 ms** |
 | third-party requests | 20 | **0** |
+
+### The fonts are a quarter of what they were
+
+Three faces shipped as TTF and OTF - 375 KB that `serve.py` did not even
+compress, because `.ttf` was never in its gzip list - and all of it on the
+critical path: `font-display: swap` does not block the first paint, it
+repaints when the face lands, and a Georgian headline reflowing a second in
+is exactly what a visitor reads as slow.
+
+`tools/slim_fonts.py` does two things before re-encoding as WOFF2:
+
+* **Subsets to what `site.css` declares.** `unicode-range` tells the browser
+  when to USE a face, not what to download. Noto Sans Georgian was carrying
+  283 Latin glyphs that its own declaration can never reach - the Latin
+  inside a Georgian line is picked per character and stays in Jost - so they
+  were pure weight.
+* **Pins the axes nothing varies.** Noto ships `wght` and `wdth`; the CSS
+  asks for `font-weight: 100 900` and never touches `font-stretch`, so
+  `wdth` is instanced out at 100.
+
+| | TTF/OTF | WOFF2, subset |
+|---|---|---|
+| Jost | 134 KB | **39 KB** |
+| Noto Sans Georgian | 224 KB | **41 KB** |
+| BPG Nino Mtavruli | 16 KB | **12 KB** |
+| total | 375 KB | **92 KB** |
+
+The ranges are wider than the page's own copy on purpose, so adding a word
+cannot silently fall off the font, and coverage is *checked* rather than
+eyeballed: every character `i18n.js`, `content.js`, `site.js` and the markup
+can put on screen, routed to the face `site.css` would pick for it, against
+that face's cmap. Two glyphs the page sets are missing and always were,
+before any subsetting - the back arrow U+2190 and the close cross U+2715 are
+not in Jost at all and come from a system font either way.
+
+### The dev server was the bottleneck it was measuring
+
+`serve.py` used `socketserver.TCPServer`, which serves **one request at a
+time**. The page's first act is to put the 12 MB `scene.glb` on the wire
+(that is what the inline script in `index.html` is for), so single-threaded
+it had three.js, `app.js`, the stylesheet, the fonts and all thirty textures
+queued up BEHIND the model - the exact opposite of what fetching the model
+early is for, and a serial chain no real host would impose. It is
+`ThreadingTCPServer` now, with keep-alive, and it gzips `.glb` as well:
+the glTF JSON chunk is 1.2 MB of the file, so the model goes **12.2 MB on
+disk to 9.3 MB on the wire** for nothing but a header. `.woff2` is
+deliberately not in that list - it is Brotli already.
+
+Together with the minified library, the sales page is **18.06 MB over 67
+requests down to 14.17 MB**, and the boot from 3.5 s to 1.96.
 
 ### The visitor does not wait for any of it
 
@@ -1607,13 +1806,22 @@ adds `EXT_texture_webp`, which three reads. Geometry is untouched.
 `tools/slim_tex.py` did the same once for `web/tex` and the plan overlay:
 colour maps at quality 82, normal and displacement maps at 92, keeping
 whichever of the two files is actually smaller (a well packed JPEG sometimes
-beats WebP on a noisy normal map, which is why two `.jpg` remain). 11.7 MB ->
-4.9 MB.
+beats WebP on a noisy normal map, which is why two `.jpg` remain - and that
+call was re-checked: WebP needs quality 85 to beat them, and the banding
+that leaves in a normal map shows up as facets in the light).
+
+`tools/slim_fonts.py` subsets and re-encodes `web/fonts` (above), and
+`tools/min_three.sh` rebuilds `web/vendor/three-min` from
+`web/vendor/three`. Both are re-run by hand, not by `build.py`: the fonts
+change when the copy needs a character the subset does not carry, and the
+library when it is replaced with a new version.
 
 ### Measuring
 
 ```bash
 node tools/perf-rig.cjs --tag try --scene2 --shot   # boot, bytes, pipelines, Scene 2
+node tools/fpsmax.cjs index.html                    # what a frame COSTS, off the vsync path
+node tools/cputime.cjs index.html 10                # ...and what it costs the main thread
 node tools/costmap.cjs lab.html                     # where a frame goes, stage by stage
 node tools/ridecost.cjs 20                          # the first 20 s as a visitor feels them
 node tools/ridecost.cjs 20 1600 900 2 'hover=1'     # ...with a storey held open
@@ -1628,6 +1836,54 @@ node tools/shot.cjs perf-shots/try-s1.png           # Scene 1, HUD and wipe out 
 node tools/shot2.cjs perf-shots/try-s2.png          # the same for Scene 2
 python3 tools/imgdiff.py perf-shots/golden-s1.png perf-shots/try-s1.png
 ```
+
+**A frame's cost can be measured after all** - just not on the page's own
+loop, which is what the note above about `dt` is really about. `rate()` sees
+the DISPLAY: a frame that fits comes back at one interval whether it cost
+4 ms or 16, so the ladder has to climb by trying. `tools/fpsmax.cjs` steps
+outside the loop instead - it drives `pipeline.render()` in a tight batch
+with no rAF between the calls, advancing the node frame by hand
+(`renderer._nodes.nodeFrame.update()`, because `PassNode.updateBeforeType`
+is FRAME and a second render inside one node frame draws nothing but the
+output quad), then waits on `queue.onSubmittedWorkDone()` and divides. That
+is throughput, fully pipelined, and it is free of the display's
+quantisation. It is also what `costmap.cjs`'s pixel-ratio sweep has never
+been: that one sets the ratio and then measures through rAF, where
+`applyScale()` puts it back every frame and vsync flattens whatever is left.
+Read `costmap` for its stage table and `fpsmax` for anything about density.
+
+It also prints a stage table and a group A/B at the settled density, but
+treat the stage table with suspicion: switching the output node rebuilds the
+pipeline, and two batches are not always enough to warm it back up - a run
+here read the bloom stage as costing more than the stage after it, which is
+impossible. The pixel-ratio sweep is the part to trust; it is monotonic and
+repeatable.
+
+What it says, at 1600x900 on the M4:
+
+| pixelRatio | Mpx | ms | fps |
+|---|---|---|---|
+| 2.00 | 5.76 | 29.3 | 34 |
+| 1.50 | 3.24 | 19.8 | 50 |
+| 1.25 | 2.25 | 15.8 | 63 |
+| 1.00 | 1.44 | 12.1 | 83 |
+
+**4.0 ms per megapixel plus 6.3 ms that is not pixels at all** - which is a
+different page from the 9.7 ms/Mpx in the table further up. The sky bake and
+the lightless pre-pass took the per-pixel cost down by more than half, and
+in doing so they changed what the frame IS: at pr 2 the fixed term is a
+fifth of it, but at the rungs the hero actually runs at it is **half**, and
+the density ladder can only turn the other half. "The frame is fill bound"
+was true when it was written and is now only half true. The fixed term is
+the two passes' geometry - ~100 draws and 3 M triangles submitted twice -
+and it is the next real lever.
+
+`tools/cputime.cjs` answers the other half of "why 18 ms when the GPU says
+12": it is a CDP sampling profile of the live page aggregated by self time.
+The answer on this machine is that it is **not** the main thread - 87% idle,
+2.2 ms a frame of actual work, with three.js's `updateByType` and
+`_renderObjectDirect` at the top of what is left. Worth re-running before
+blaming the page's own per-frame bookkeeping for anything.
 
 **Interleave, or be lied to.** The wall clock here swings 30% between page
 loads, which is wider than most of the differences worth chasing. Measuring

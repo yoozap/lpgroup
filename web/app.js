@@ -240,16 +240,43 @@ const AERIAL = uniform( 1 / 780 );
 const AERIAL_P = uniform( 1.55 );
 const AERIAL_AMT = uniform(
 	+ ( new URLSearchParams( location.search ).get( 'haze' ) ?? 1 ) );
+/* `?ladder=old` puts ALL of this session's ladder changes back at once -
+ * the opening window, the restored rung, the display-relative stall limit
+ * and the quick first climb - so an A/B is one flag rather than four, and
+ * cannot accidentally test three of them. */
+const LADDER_OLD = __q.get( 'ladder' ) === 'old';
 const PROBE_AFTER = 20000;              // ms before a failed step is retried
-/* A frame over STALL ms is not evidence about density - it is a compile, a
- * texture upload or a hidden tab - and a ladder that treats it as evidence
- * drops to the floor over one hitch and spends the probe interval climbing
- * back. MISSES is how many frames in a row must miss the interval before
- * the ladder moves: enough that one slow frame is not a verdict, few enough
- * that a visitor does not watch it decide. */
-const STALL = 200, MISSES = 4;
+/* A frame over the stall limit is not evidence about density - it is a compile, a
+ * texture upload or a hidden tab. 200 ms was chosen when a frame cost 56 ms
+ * and it is far too generous now that one costs 13: at the rungs this page
+ * runs at, dropping from the top of the ladder to the floor saves about
+ * 14 ms, so a frame 95 ms over budget CANNOT be a density problem - no
+ * density on the ladder would have fixed it - and reading it as one sent
+ * the ladder straight to the floor over a single texture landing. The limit
+ * is read off the display instead: four intervals, which keeps the genuine
+ * 25-33 ms misses as evidence and throws out the stalls. `?stall=` pins it.
+ *
+ * MISSES is how many frames must miss the interval before the ladder moves:
+ * enough that one slow frame is not a verdict, few enough that a visitor
+ * does not watch it decide. */
+const STALL_IV = + ( __q.get( 'stall' ) || 0 );
+const stallMs = () => STALL_IV || ( LADDER_OLD ? 200 : Math.max( 80, ( frameIv || 16.7 ) * 4 ) );
+const MISSES = 4;
 let prStep = STEP0, prCap = 0, probeAt = 0, probeWait = PROBE_AFTER;
 let overRun = 0, cleanRun = 0, holdFor = 0, lastDrawAt = 0, missWin = 0;
+/* The display's own interval, learnt rather than assumed - about 16.7 ms
+ * here, 8.3 on a 120 Hz panel - from the frames that FIT, which are the
+ * ones pinned to it. The descent does NOT use it (see the dead end there);
+ * `stallMs()` does, so that "this frame is a compile, not a density
+ * verdict" is a judgement about the display rather than a number chosen
+ * when a frame cost 56 ms. */
+let frameIv = 0;
+/* Has any rung ever been ruled out here? Until one has, the ladder is
+ * still finding the machine's level and there is no reason to spend three
+ * seconds a rung looking for it; afterwards it is probing a density it has
+ * already failed at, and three seconds is right. `prCap` cannot answer
+ * this on its own - 0 means both "no cap" and "capped at full density". */
+let hadVerdict = false;
 /* A frame drawn while the show flat is warming is a compile and a first
  * draw, not evidence about density - the same reason `STALL` exists, except
  * these land at 30-70 ms rather than over 200. Counted as evidence they were
@@ -263,14 +290,46 @@ let warming = false;
  * landing, the first time each material is seen - and they were three rungs
  * of descent before the warm had even started. Ended by the warm, or by a
  * fallback for a page where the warm never runs. */
+/* ...and the opening is not over when the WARM is over. Measured second by
+ * second on a 40 s ride: the flat's warm finishes at 2.4 s, but frames do
+ * not become honest until about 5 - textures are still landing, the temporal
+ * AA has no history, and every surface the rail brings round the corner is
+ * drawn for the first time. Ending the window on the warm meant three
+ * descents in seconds 1 to 4, each one a VERDICT: `prCap` pinned to the
+ * floor and `probeWait` doubled to a minute, so a machine that holds 2 Mpx
+ * comfortably spent its whole visit at 1.44. The window now ends on
+ * whichever is LATER, the warm or a floor on the clock.
+ * ?warmfloor=0 ends it with the warm, for the A/B. */
+const WARM_FLOOR = + ( __q.get( 'warmfloor' ) ?? ( LADDER_OLD ? 0 : 5000 ) );
+let warmFloorAt = 0;
 function endWarm() {
 	if ( ! warming ) return;
+	const left = warmFloorAt - performance.now();
+	if ( left > 0 ) { setTimeout( endWarm, left + 16 ); return; }
 	warming = false;
+	/* Giving the RUNG back here - `prStep = STEP0`, on the argument that
+	 * if the opening's frames are not evidence then they are not evidence
+	 * about the rung either - was built and is OFF, because it measures
+	 * worse and the reason is instructive.
+	 *
+	 * It is a blind jump, and it lands at the one moment the page is least
+	 * able to hold it: the instant this window closes is the instant
+	 * misses start counting as VERDICTS again, and the opening is still
+	 * noisy either side of any fixed deadline. Measured: the restored rung
+	 * missed within the second, the descent that followed set `prCap` to
+	 * the floor and doubled `probeWait` to forty seconds, and the hero
+	 * spent the rest of the ride at 1.44 Mpx - where simply climbing from
+	 * where it stood reached 2.51 and held it.
+	 *
+	 * The slow recovery this was meant to fix is real; `TRY_FAST` is the
+	 * answer to it. Climbing is evidence-led and self-correcting, and a
+	 * jump is neither. `?warmrung=1` to try it again. */
+	if ( WARM_RUNG && prStep > STEP0 ) prStep = STEP0;
 	ladderReset();
 	invalidate( 2 );
 }
 function ladderReset() {
-	prCap = 0; probeAt = 0; probeWait = PROBE_AFTER;
+	prCap = 0; probeAt = 0; probeWait = PROBE_AFTER; hadVerdict = false;
 	overRun = 0; cleanRun = 0; missWin = 0; holdFor = 0; lastDrawAt = 0;
 }
 
@@ -428,6 +487,15 @@ function applyScale() {
  * and it self-damps: one failure at a rung buys twenty seconds of not
  * asking again, then forty. */
 const TRY_MS = + ( __q.get( 'tryms' ) || 3000 );
+/* ...and until the first verdict, much faster than that. From the floor
+ * to the top of this ladder is seven rungs; at TRY_MS that is twenty-one
+ * seconds of a first impression spent climbing, and the only thing a
+ * visitor gets for the wait is the certainty that each rung held for three
+ * whole seconds before the next was tried. A rung that does not hold costs
+ * a handful of stuttering frames and the descent aims straight at the one
+ * that does, so the search is cheap and it should be quick. */
+const TRY_FAST = + ( __q.get( 'tryfast' ) || 700 );
+const WARM_RUNG = ! LADDER_OLD && __q.get( 'warmrung' ) === '1';
 let nextTry = 0;
 
 /* one drawn frame's worth of evidence */
@@ -435,7 +503,7 @@ function rate() {
 	const now = performance.now();
 	const dt = lastDrawAt ? now - lastDrawAt : 0;
 	lastDrawAt = now;
-	if ( ! dt || dt > STALL ) return;            // first frame, a stall, a hidden tab
+	if ( ! dt || dt > stallMs() ) return;        // first frame, a stall, a hidden tab
 	/* What a million pixels cost here - the number the still frame spends
 	 * its supersampling budget against. It is taken from STILL frames only,
 	 * and only from ones that ran over the display's own interval, because
@@ -472,6 +540,8 @@ function rate() {
 	missWin = ( missWin << 1 | ( dt > FRAME_CEIL ? 1 : 0 ) ) & 0xfff;
 	let missed = 0;
 	for ( let w = missWin; w; w >>= 1 ) missed += w & 1;
+	/* A frame that fits IS one display interval, so these are the clock. */
+	if ( dt <= FRAME_CEIL ) frameIv = frameIv ? frameIv * 0.9 + dt * 0.1 : dt;
 	if ( dt > FRAME_CEIL ) {
 		cleanRun = 0;
 		/* How FAR down, not just down. The frame is fill bound, so its cost
@@ -483,6 +553,32 @@ function rate() {
 		 * 30 fps, which is the whole of what "it lags" was. Aiming straight
 		 * at the rung the measurement asks for gets there in about one. */
 		if ( ( ++ overRun >= MISSES || missed >= 6 ) && prStep < STEPS.length - 1 ) {
+			/* DEAD END, measured 2026-10-20 - do not retry it.
+			 *
+			 * The argument was: `dt` is the display and the display is
+			 * quantised, so a frame that misses one flip comes back at two
+			 * intervals whether it cost 16.8 ms or 33, and dividing by it
+			 * treats every single miss as a frame at 1.8x budget. A frame
+			 * arriving at (k+1) intervals cost somewhere in ( k, k+1 ] of
+			 * them, so `dt - iv` is its lower bound and the interval is
+			 * what to divide by. It was built, and it made the hero DRIFT
+			 * DOWN - 3.07 Mpx to 2.51 to 2.07 over ten seconds - where the
+			 * line below holds 3.07 flat for the whole ride.
+			 *
+			 * The premise is simply false here. Pull every per-second
+			 * median over the ceiling out of the rides in `tools/` and
+			 * they come back 18.6, 19.1, 22.3, 24.6, 40.2, 54.8 - a
+			 * continuous spread, and NOT ONE of thirty-four within 2.5 ms
+			 * of a clean 33.3. The page is not hard-locked to the flip;
+			 * `dt` is an honest cost, and `dt - iv` therefore understates
+			 * it badly - a 22 ms frame reads as 5.3 ms of overrun and asks
+			 * for one rung where it wants two.
+			 *
+			 * It also lands the ladder ON the cliff rather than below it.
+			 * Dropping to exactly the rung that fits leaves the page
+			 * missing a few frames a second at the edge, which the ladder
+			 * then reads as more evidence, and it walks itself down. The
+			 * overshoot the line below produces is the margin. */
 			const want = STEPS[ prStep ] * Math.sqrt( FRAME_CEIL / dt );
 			let aim = prStep + 1;
 			while ( aim < STEPS.length - 1 && STEPS[ aim ] > want ) aim ++;
@@ -498,6 +594,7 @@ function rate() {
 			 * and `endWarm` gives it a clean slate to climb from. */
 			if ( ! warming ) {
 				prCap = aim;                     // this density does not fit here
+				hadVerdict = true;               // ...so stop hunting, start probing
 				probeWait = Math.min( probeWait * 2, 60000 );
 				probeAt = now + probeWait;
 			}
@@ -515,7 +612,8 @@ function rate() {
 		 * recent window be nearly clean. */
 		cleanRun ++;
 		if ( now > nextTry && missed <= 2 && cleanRun >= 20 && prStep > 0 && mayRise ) {
-			prStep --; cleanRun = 0; holdFor = 12; nextTry = now + TRY_MS;
+			prStep --; cleanRun = 0; holdFor = 12;
+			nextTry = now + ( hadVerdict || LADDER_OLD ? TRY_MS : TRY_FAST );
 			if ( prStep < prCap ) prCap = prStep;
 			invalidate( 2 );
 		}
@@ -794,7 +892,10 @@ async function init() {
 	 * hold the hero - see `warming`. Cleared when the show flat's warm ends,
 	 * or on a fallback for a page that never warms it. */
 	warming = true;
-	setTimeout( endWarm, 4000 );
+	warmFloorAt = performance.now() + WARM_FLOOR;
+	// the 4 s fallback is for a page whose flat never warms at all, and it
+	// stays that long so `?warmfloor=0` reproduces the old behaviour exactly
+	setTimeout( endWarm, Math.max( 4000, WARM_FLOOR ) + 16 );
 	announce( 'ready' );
 	// Everything Scene 2 needs - the show flat's maps and its pipelines - is
 	// fetched and compiled in the background once the street is up.
