@@ -1710,6 +1710,36 @@ tools/hoverwait.cjs`, interleaved, medians of two rounds):
 | hover armed | 12.78 s | **10.14 s** |
 | flat fully open | 14.85 s | **12.15 s** |
 
+**It shipped broken, and the way it broke is the useful part.** The flat's
+geometry used to be in the scene from boot, so the only thing that could be
+missing was a pipeline - which is what `FLOOR_ARM_MS` is a backstop for:
+arm the hover on the compiles, or after 2.5 s, whichever lands first. The
+split made that geometry a DOWNLOAD, and opened a window in which
+`groups.flat` is empty. At 4 Mbps it was still empty twenty seconds in. The
+deadline fired at 2.5 s regardless and the wall parted onto a storey with
+nothing in it.
+
+There were two ways in and only one of them was found at first: the hover,
+and the storey CLICK, which had no gate at all and does not need a hover -
+the fallback cast opens the top floor from anywhere on the block. Both go
+through `withFlat()` now, and `flatIn` answers *is the geometry here*
+rather than *has it been asked for*. That distinction is the whole bug.
+
+**Every rig here passed the broken build**, because every one of them waits
+nine or fourteen seconds before it looks, by which time the flat is long
+since in. `tools/flatwindow.cjs` is the one that does not: it throttles the
+link, finds the facade by sweeping until the page reports a lit storey,
+drives both routes, and shoots *through* the download window, failing on
+any frame where the flat is on screen and empty. Two rules it follows that
+the first round of checking did not:
+
+* **Run it against the broken build first.** It returns exit 1 and flags
+  five frames `EMPTY FLAT ON SCREEN`. A check that has never failed is not
+  a check.
+* **A vacuous run is a FAIL.** Its first version used a fixed pointer
+  coordinate, missed the building entirely - `hot: 0` in every sample, both
+  routes - and printed PASS while testing nothing.
+
 The hover arms **earlier**, not later, which is the opposite of what this
 file used to predict when it listed the split as "measured but not done".
 The reason is that the warm was never waiting on the link: a smaller street
@@ -1893,6 +1923,7 @@ node tools/perf-rig.cjs --tag try --scene2 --shot   # boot, bytes, pipelines, Sc
 node tools/fpsmax.cjs index.html                    # what a frame COSTS, off the vsync path
 node tools/cputime.cjs index.html 10                # ...and what it costs the main thread
 node tools/memcost.cjs index.html                   # ...and what it costs in MEMORY
+node tools/flatwindow.cjs 4                         # can a visitor SEE the flat missing?
 python3 tools/split_glb.py --check                  # re-cut the model, and verify the cut
 node tools/costmap.cjs lab.html                     # where a frame goes, stage by stage
 node tools/ridecost.cjs 20                          # the first 20 s as a visitor feels them
