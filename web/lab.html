@@ -83,7 +83,7 @@
 <script>
 window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 	var o = { loaded: 0, total: 0 };
-	var split = ! /glbsplit=0/.test( location.search );
+	var split = /glbsplit=1/.test( location.search );   // off by default - see app.js
 	var first = split ? './scene-street.glb' : './scene.glb';
 	var p = fetch( first ).then( async function ( r ) {
 		if ( ! r.ok ) throw new Error( first + ' ' + r.status );

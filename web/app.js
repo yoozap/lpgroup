@@ -632,11 +632,20 @@ let maps = null, scene2Ready = null, planTex = null;
  * the loader with its Draco decoder, which therefore cannot be disposed
  * when the street is done with it. */
 let sceneMaterials = null, glbLoader = null, glbDraco = null, flatReady = null;
-/* `?glbsplit=0` goes back to the one combined `scene.glb`, which is still
- * written by the build and still complete. It is the A/B for what the split
- * costs the hover - the only thing it can cost - and it is the way back if
- * a rebuild ever leaves the two halves disagreeing. */
-const GLB_SPLIT = __q.get( 'glbsplit' ) !== '0';
+/* OFF BY DEFAULT since 2026-10-20, after it broke production.
+ *
+ * Splitting the model is right - it takes the first frame from 9.31 MB to
+ * 5.71 - but it changes something the rest of the page assumed: the flat's
+ * GEOMETRY used to be in the scene from boot, and became a download. There
+ * is now a window, as long as that download takes, in which `groups.flat`
+ * is empty - measured at 4 Mbps, it still held 0 meshes twenty seconds in -
+ * and the hover arms on a 2.5 s deadline regardless, so the wall parted on
+ * a storey with nothing in it.
+ *
+ * `?glbsplit=1` turns it back on. The arming fix in `floorTest` is in and
+ * looks right, but it goes back on by default only once it has been
+ * measured on a throttled link rather than argued about. */
+const GLB_SPLIT = __q.get( 'glbsplit' ) === '1';
 
 init().catch( ( e ) => {
 	console.error( e );
@@ -2459,7 +2468,22 @@ function floorTest() {
 			const arm = () => { floorArmed = true; floorDirty = true; invalidate(); };
 			prepareScene2();
 			compiledPromise().then( arm );
-			setTimeout( arm, FLOOR_ARM_MS );
+			/* The deadline is a backstop against a slow WARM, and it was
+			 * written when the flat's GEOMETRY was in the scene from boot,
+			 * so there was always something to open onto and the only thing
+			 * missing could be a pipeline. Since the model was split the
+			 * geometry is a download, and a deadline that fires before it
+			 * lands parts the wall onto a storey with nothing in it - which
+			 * reads as the page being broken, not as it still loading.
+			 *
+			 * So the clock starts when the flat is IN, not when the pointer
+			 * arrives. Once the file has landed - and always, with
+			 * `?glbsplit=0` - that is immediately, and the behaviour is the
+			 * old one exactly. A flat that fails to load still arms on the
+			 * deadline, because a hover that never answers is worse than
+			 * one that opens on an empty room. */
+			const deadline = () => setTimeout( arm, FLOOR_ARM_MS );
+			loadFlat().then( deadline, deadline );
 		}
 		/* Not armed is not the same as not answering. The wall must not part
 		 * on a room whose furniture has no pipeline yet, but the RAY is free
