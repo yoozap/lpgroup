@@ -17,6 +17,7 @@ const ROUNDS = + ( process.argv[ 2 ] || 3 );
 const QUERY = process.argv[ 3 ] || '';
 const W = + ( process.argv[ 4 ] || 1600 ), H = + ( process.argv[ 5 ] || 900 );
 const DSF = + ( process.argv[ 6 ] || 2 );
+const MBPS = + ( process.env.MBPS || 0 );
 const med = ( a ) => { const s = a.filter( x => x != null ).slice().sort( ( x, y ) => x - y );
 	return s.length ? s[ s.length >> 1 ] : null; };
 
@@ -34,6 +35,19 @@ async function round( n ) {
 			'--window-size=' + W + ',' + H, '--user-data-dir=' + dir ] } );
 	const p = await b.newPage();
 	await p.setViewport( { width: W, height: H, deviceScaleFactor: DSF } );
+	/* `MBPS=12 node tools/hoverwait.cjs ...` throttles the link. On
+	 * localhost the model is on the wire in tens of milliseconds, which
+	 * makes every question about DOWNLOAD order unanswerable - and the one
+	 * thing splitting the model can cost is the hover waiting on a second
+	 * file. A throttled round is the only honest test of that. */
+	if ( MBPS ) {
+		const cdp = await p.target().createCDPSession();
+		await cdp.send( 'Network.enable' );
+		await cdp.send( 'Network.emulateNetworkConditions', {
+			offline: false, latency: 40,
+			downloadThroughput: MBPS * 1024 * 1024 / 8,
+			uploadThroughput: MBPS * 1024 * 1024 / 8 } );
+	}
 	const log = [];
 	await p.evaluateOnNewDocument( () => { window.__t0 = performance.now(); } );
 	p.on( 'console', m => { const t = m.text();

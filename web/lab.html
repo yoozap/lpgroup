@@ -83,8 +83,10 @@
 <script>
 window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 	var o = { loaded: 0, total: 0 };
-	var p = fetch( './scene.glb' ).then( async function ( r ) {
-		if ( ! r.ok ) throw new Error( 'scene.glb ' + r.status );
+	var split = ! /glbsplit=0/.test( location.search );
+	var first = split ? './scene-street.glb' : './scene.glb';
+	var p = fetch( first ).then( async function ( r ) {
+		if ( ! r.ok ) throw new Error( first + ' ' + r.status );
 		o.total = + ( r.headers.get( 'content-length' ) || 0 );
 		if ( ! r.body ) return r.arrayBuffer();
 		var parts = [], rd = r.body.getReader();
@@ -98,6 +100,14 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 		return all.buffer;
 	} );
 	p.progress = o;
+	/* The show flat, behind the street and never beside it. */
+	p.then( function () {
+		if ( ! split ) return;
+		window.__glbFlat = fetch( './scene-flat.glb' ).then( function ( r ) {
+			if ( ! r.ok ) throw new Error( 'scene-flat.glb ' + r.status );
+			return r.arrayBuffer();
+		} );
+	}, function () {} );
 	return p;
 } )();
 </script>

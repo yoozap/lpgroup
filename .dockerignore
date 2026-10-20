@@ -4,3 +4,14 @@ perf-shots/
 serve.py
 README.md
 .git/
+
+# The combined model is an INTERMEDIATE now, not something the page asks
+# for: `blender/build.py` writes it and `tools/split_glb.py` cuts it into
+# scene-street.glb and scene-flat.glb, which are what index.html fetches.
+# Shipping it too would put 12.5 MB of dead weight in the image.
+web/scene.glb
+
+# Development-only pages and the reference photograph the lab wipes against.
+web/lab.html
+web/_glasstest.html
+web/reference.jpg

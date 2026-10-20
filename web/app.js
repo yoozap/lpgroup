@@ -626,6 +626,17 @@ let sun = null;
 const shadowDirty = () => { if ( sun ) sun.shadow.needsUpdate = true; };
 /* Scene 2's maps and pipelines, fetched and compiled once the street is up. */
 let maps = null, scene2Ready = null, planTex = null;
+/* The show flat arrives in its own file, after the street and behind the
+ * first frame - see `loadFlat`. These are what that second parse needs and
+ * cannot build for itself: the shaded materials `buildMaterials` made, and
+ * the loader with its Draco decoder, which therefore cannot be disposed
+ * when the street is done with it. */
+let sceneMaterials = null, glbLoader = null, glbDraco = null, flatReady = null;
+/* `?glbsplit=0` goes back to the one combined `scene.glb`, which is still
+ * written by the build and still complete. It is the A/B for what the split
+ * costs the hover - the only thing it can cost - and it is the way back if
+ * a rebuild ever leaves the two halves disagreeing. */
+const GLB_SPLIT = __q.get( 'glbsplit' ) !== '0';
 
 init().catch( ( e ) => {
 	console.error( e );
@@ -776,6 +787,8 @@ async function init() {
 	 * where nothing else is happening. */
 	draco.preload();
 	const loader = new GLTFLoader().setDRACOLoader( draco );
+	// the show flat is a second file through the same loader - see `loadFlat`
+	glbDraco = draco; glbLoader = loader;
 	// the street's maps and the meta travel beside the model, not after it
 	maps = makeMaps();
 	const streetMaps = loadMapSet( false );
@@ -798,7 +811,7 @@ async function init() {
 	}
 	const gltf = buf
 		? await new Promise( ( res, rej ) => loader.parse( buf, './', res, rej ) )
-		: await loader.loadAsync( './scene.glb', ( e ) => {
+		: await loader.loadAsync( GLB_SPLIT ? './scene-street.glb' : './scene.glb', ( e ) => {
 			if ( e.total ) step( 30 + 30 * e.loaded / e.total );
 		} );
 	/* Let the 10.6 MB go: the head's fetch resolved to an ArrayBuffer and
@@ -807,7 +820,10 @@ async function init() {
 	 * from it. */
 	buf = null;
 	window.__glb = null;
-	draco.dispose();
+	/* `draco.dispose()` used to be here. It cannot be: the show flat is a
+	 * second Draco file through the same loader, and disposing the decoder
+	 * takes its worker pool and its wasm module with it. `loadFlat` does it
+	 * once the flat is in. */
 
 	step( 64, 'shading surfaces' );
 	meta = await metaReq;
@@ -820,6 +836,7 @@ async function init() {
 	const { materials, XRAY } = buildMaterials( THREE, { sunDir: SUN_DIR, sunColor: SUN_COLOR, maps,
 		flat: meta && meta.flat } );
 	xray = XRAY;
+	sceneMaterials = materials;          // ...and the flat, when it lands
 	// the furniture keeps its own glTF materials, so it is the only thing
 	// here whose textures nobody had set up: do that before they are used
 	console.info( 'textures sharpened to anisotropy ' + maxAniso() + ':',
@@ -1250,11 +1267,86 @@ let scene2Compiled = null, scene2CompiledDone = null;
 const compiledPromise = () => scene2Compiled
 	|| ( scene2Compiled = new Promise( r => { scene2CompiledDone = r; } ) );
 
+/* The show flat, which arrives in its own file after the street.
+ *
+ * `scene.glb` was 12.52 MB and the first frame waited for all of it, while
+ * 4.87 MB of that - 1048 nodes, 832 meshes and every one of the 33 embedded
+ * textures - is the show flat, which stands inside the block with
+ * `visible = false` until somebody hovers a storey. The partition is clean
+ * enough to be safe: the two sides share no bufferView and no image, only
+ * eight materials, which are simply written into both files. See
+ * `tools/split_glb.py`, which also checks that every node and primitive of
+ * the original turns up in exactly one of the two.
+ *
+ * So the street is 5.71 MB on the wire instead of 9.31, and the flat's
+ * 3.60 MB is fetched behind the first frame - started by the HTML the
+ * moment the street's own fetch resolves, so the two never compete for the
+ * link. It has until the hover to arrive, which is the same second
+ * `prepareScene2` was already spending on compiles; on anything but a very
+ * slow connection it is there before the warm wants it.
+ *
+ * Folding it in is `batchInto( root, { flat: 1 } )` - the same weld, the
+ * same instancing rule, the same baked pivots the street got - plus the two
+ * things that only make sense once the flat exists: its materials are
+ * split by job for the floor view, and the welded results are patched. */
+async function loadFlat() {
+	// with the split off, the flat came in with the street and `optimise`
+	// has already welded it into `groups.flat`
+	if ( ! GLB_SPLIT ) return true;
+	if ( flatReady ) return flatReady;
+	flatReady = ( async () => {
+		const t0 = performance.now();
+		let buf = null;
+		const pre = window.__glbFlat;
+		if ( pre ) {
+			try { buf = await pre; } catch ( e ) {
+				console.warn( 'the head\'s scene-flat.glb fetch failed, loading it again:', e );
+			}
+		}
+		const gltf = buf
+			? await new Promise( ( res, rej ) => glbLoader.parse( buf, './', res, rej ) )
+			: await glbLoader.loadAsync( './scene-flat.glb' );
+		window.__glbFlat = null;
+		const tParsed = performance.now();
+		/* Same order as the street's: the furniture's own glTF textures are
+		 * the only ones nobody has set up, then the shaded materials go on
+		 * by name, then it is welded. It has to be IN the scene before
+		 * `batchInto` runs - the weld reads world matrices, and
+		 * `groups.flat.attach()` resolves against the group's own. */
+		sharpenTextures( gltf.scene );
+		applyMaterials( gltf.scene, sceneMaterials );
+		planSplitMaterials( gltf.scene );
+		scene.add( gltf.scene );
+		batchInto( gltf.scene, { flat: true } );
+		gltf.scene.removeFromParent();           // the husk, now empty of meshes
+		planSetupMaterials();                    // patch what the weld produced
+		/* The flat is the decoder's last customer. */
+		if ( glbDraco ) { glbDraco.dispose(); glbDraco = null; }
+		console.info( 'show flat: ' + Math.round( tParsed - t0 ) + ' ms to parse, '
+			+ Math.round( performance.now() - tParsed ) + ' ms to fold in, '
+			+ groups.flat.children.length + ' objects' );
+		/* No `shadowDirty()` here on purpose. The map is drawn once and
+		 * frozen, the flat folds in with `groups.flat` still hidden, and it
+		 * is inside the block anyway - so nothing it could cast has changed.
+		 * Asking for a fresh 4096 map would be half a second of boot spent
+		 * redrawing the same picture. `setScene( 2 )` dirties it when the
+		 * flat actually becomes something that casts. */
+		return true;
+	} )();
+	return flatReady;
+}
+
 function prepareScene2() {
 	if ( scene2Ready ) return scene2Ready;
 	compiledPromise();                            // so the hover has it to wait on
 	scene2Ready = ( async () => {
 		const t0 = performance.now();
+		/* ...and before any of it, the flat has to BE here: it is a second
+		 * download now, and everything below reads `groups.flat`. */
+		try { await loadFlat(); } catch ( e ) {
+			console.error( 'the show flat did not load:', e );
+			return scene2CompiledDone();
+		}
 		/* The hover waits for PIPELINES, not for pictures: a map that has not
 		 * landed yet is a 1x1 default that gets swapped in underneath the
 		 * same material with no pipeline rebuild. So when the boot has
@@ -1472,25 +1564,21 @@ function groupOf( o ) {
 	return 'main';
 }
 
-function optimise( root ) {
-	/* Before any of it: the flat's materials are given one job each, so the
-	 * floor view can take the furniture out of a mesh and leave the wall it
-	 * shares a material with standing. See `planSplitMaterials`. */
-	planSplitMaterials( root );
-	const CLIPPED = { cut: true, tower: true };
-	for ( const g of Object.keys( groups ) ) {
-		groups[ g ] = CLIPPED[ g ] ? new THREE.ClippingGroup() : new THREE.Group();
-		groups[ g ].name = 'group_' + g;
-		scene.add( groups[ g ] );
-	}
-	groups.cut.clippingPlanes = [ cutPlane ];
-	groups.cut.clipShadows = true;
-	groups.tower.clippingPlanes = [ towerPlane ];
-	groups.tower.clipShadows = true;
-	/* The top-floor cells stand inside the block, so they answer to the
-	 * storey cut as well as to their own: nested clipping groups union their
-	 * planes and a fragment either plane drops is gone. */
-	groups.tower.add( groups.cut );
+/* The batching itself, lifted out of `optimise` so it can be run a second
+ * time over a model that arrived later.
+ *
+ * `scene.glb` used to carry the street and the show flat together, and the
+ * flat is 4.87 MB of a 12.52 MB file that the first frame waits for and
+ * does not draw: it stands inside the block with `visible = false` until
+ * somebody hovers a storey. It is a separate download now
+ * (`tools/split_glb.py`), and when it lands it has to be welded and grouped
+ * exactly as the street was - same instancing rule, same per-material
+ * merge, same pivots baked into the furniture. `only` restricts the walk to
+ * one group so folding the flat in cannot touch what is already standing.
+ *
+ * Nothing in here creates a group or measures the scene; `optimise` keeps
+ * both, because they are the parts that may only happen once. */
+function batchInto( root, only ) {
 	const byGeo = new Map();
 	// In developer mode every piece of the flat stays its own object so it can
 	// be picked and dragged. They are collected first and re-parented after
@@ -1499,6 +1587,7 @@ function optimise( root ) {
 	root.traverse( ( o ) => {
 		if ( ! o.isMesh ) return;
 		const g = groupOf( o );
+		if ( only && ! only[ g ] ) return;
 		if ( DEV && g === 'flat' ) { keepWhole.push( o ); return; }
 		const k = g + '|' + o.geometry.uuid + '|' + o.material.uuid;
 		if ( ! byGeo.has( k ) ) byGeo.set( k, { g, list: [] } );
@@ -1623,6 +1712,28 @@ function optimise( root ) {
 		// doors of one flat at a time, round their own hinges
 		geos.forEach( g => { if ( merged && ! swing ) g.dispose(); } );
 	}
+}
+
+function optimise( root ) {
+	/* Before any of it: the flat's materials are given one job each, so the
+	 * floor view can take the furniture out of a mesh and leave the wall it
+	 * shares a material with standing. See `planSplitMaterials`. */
+	planSplitMaterials( root );
+	const CLIPPED = { cut: true, tower: true };
+	for ( const g of Object.keys( groups ) ) {
+		groups[ g ] = CLIPPED[ g ] ? new THREE.ClippingGroup() : new THREE.Group();
+		groups[ g ].name = 'group_' + g;
+		scene.add( groups[ g ] );
+	}
+	groups.cut.clippingPlanes = [ cutPlane ];
+	groups.cut.clipShadows = true;
+	groups.tower.clippingPlanes = [ towerPlane ];
+	groups.tower.clipShadows = true;
+	/* The top-floor cells stand inside the block, so they answer to the
+	 * storey cut as well as to their own: nested clipping groups union their
+	 * planes and a fragment either plane drops is gone. */
+	groups.tower.add( groups.cut );
+	batchInto( root );
 	// the sweep runs from just above the roof to just below the flat's slab
 	const bb = new THREE.Box3().setFromObject( groups.cut );
 	cutTop = bb.max.y + 0.3;

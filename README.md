@@ -1648,6 +1648,76 @@ do not depend on whether an image has arrived. The street's maps are awaited
 before the first frame, the flat's are not fetched until Scene 2 is wanted,
 and the 2.9 MB plan overlay only when its checkbox is first ticked.
 
+### The first frame does not wait for the show flat
+
+`scene.glb` was 12.52 MB on disk and 9.09 MB on the wire, and the first
+frame waited for all of it. But the show flat is not in that frame: it
+stands inside the block with `visible = false` until somebody hovers a
+storey, and `prepareScene2()` spends the second after `ready` warming it
+anyway. Its bytes were being paid for a second before they were wanted.
+
+The partition turned out to be unusually clean, which is what made it safe:
+
+| | |
+|---|---|
+| street geometry | 7.16 MB |
+| flat geometry | 1.77 MB |
+| flat images (33) | 2.50 MB — the street uses **none** of them |
+| bufferViews shared between the two | **0** |
+| materials shared | 8, duplicated as JSON into both files |
+
+Nothing had to be cut in half. Every node is a direct child of
+`BuildingRoot` and 1048 of the 2814 are named `flat*`, so
+`tools/split_glb.py` walks the tree, keeps one side, and renumbers every
+index space — nodes, meshes, materials, textures, images, samplers,
+accessors, bufferViews — into a fresh binary chunk. `--check` verifies that
+every node name and every primitive of the original turns up across the two
+files: 2815 names, 1390 primitives, nothing missing and nothing duplicated
+but the one carried root.
+
+| | on disk | gzipped |
+|---|---|---|
+| `scene-street.glb` | 7.65 MB | **5.71 MB** |
+| `scene-flat.glb` | 4.87 MB | 3.60 MB |
+| (was `scene.glb`) | 12.52 MB | 9.31 MB |
+
+The HTML asks for the flat only once the street's own fetch has **resolved**,
+so the two are never on the link together and the first frame is as early as
+it can be. `loadFlat()` then folds it in: `batchInto( root, { flat: 1 } )`,
+which is the same weld, the same instancing rule and the same baked pivots
+the street got — `optimise()` was split into the part that may only happen
+once (making the groups, measuring the cut) and the part that can run again.
+
+Two things follow from the flat being a second file. The Draco decoder is no
+longer disposed when the street is done with it, because it has another file
+to decode; and `planSetupMaterials()` runs again after the fold, because it
+reads `groups.flat`. `scene.glb` is now an intermediate — `build.py` writes
+it, `split_glb.py` cuts it, and `.dockerignore` keeps it out of the image.
+
+**The render is unchanged**: Scene 1 differs by 0.464/255 against a 0.427
+noise floor and Scene 2 — the flat itself — by **0.901 against its own
+0.996**, i.e. below the difference between two captures of the same build.
+
+The one thing this could cost is the hover, which cannot part a wall until
+the flat can be drawn - and it does not cost it anything. On localhost the
+page appears ~290 ms sooner and the hover arms at the same moment. Over a
+throttled link, where the question actually means something (`MBPS=12 node
+tools/hoverwait.cjs`, interleaved, medians of two rounds):
+
+| 12 Mbps, from navigation | `?glbsplit=0` | now |
+|---|---|---|
+| page appears | 10.05 s | **7.52 s** |
+| hover armed | 12.78 s | **10.14 s** |
+| flat fully open | 14.85 s | **12.15 s** |
+
+The hover arms **earlier**, not later, which is the opposite of what this
+file used to predict when it listed the split as "measured but not done".
+The reason is that the warm was never waiting on the link: a smaller street
+means the first frame, and therefore `prepareScene2`, start two and a half
+seconds sooner, and the flat's 3.60 MB comes down during a warm that was
+always going to spend a second and a half generating WGSL. The download was
+not the hover's critical path - the compiles were.
+
 ### Nothing is fetched from anyone else
 
 three.js came from cdn.jsdelivr.net: twenty cross-origin requests - a DNS
@@ -1822,6 +1892,8 @@ library when it is replaced with a new version.
 node tools/perf-rig.cjs --tag try --scene2 --shot   # boot, bytes, pipelines, Scene 2
 node tools/fpsmax.cjs index.html                    # what a frame COSTS, off the vsync path
 node tools/cputime.cjs index.html 10                # ...and what it costs the main thread
+node tools/memcost.cjs index.html                   # ...and what it costs in MEMORY
+python3 tools/split_glb.py --check                  # re-cut the model, and verify the cut
 node tools/costmap.cjs lab.html                     # where a frame goes, stage by stage
 node tools/ridecost.cjs 20                          # the first 20 s as a visitor feels them
 node tools/ridecost.cjs 20 1600 900 2 'hover=1'     # ...with a storey held open
@@ -1884,6 +1956,31 @@ The answer on this machine is that it is **not** the main thread - 87% idle,
 2.2 ms a frame of actual work, with three.js's `updateByType` and
 `_renderObjectDirect` at the top of what is left. Worth re-running before
 blaming the page's own per-frame bookkeeping for anything.
+
+**`tools/memcost.cjs` is the third of these, and the one that was missing
+longest.** `perf-rig` reports `mem`, which is the JS heap - about 370 MB,
+and a third of the story. What a visitor sees in Activity Monitor is the
+renderer process plus the GPU process, and most of the latter is render
+TARGETS, every one of them sized from the current pixel ratio. It walks the
+page's states, forces a collection before each sample so the number is what
+is HELD rather than what has not been collected yet, and prints the RSS of
+every Chrome process beside the targets' own bytes. Measured at 1600x900:
+
+| state | RSS |
+|---|---|
+| street, just booted | **2093 MB** (renderer 962, GPU 612, browser 198) |
+| street, parked 12 s | 1432 MB |
+| scene 2 | 730 MB |
+| flat, parked 20 s | 639 MB |
+
+The peak is the BOOT, not the steady state, and it is mostly garbage that
+has not been collected: forcing a collection at 2560x1440 gives 1219 MB at
+the same point. The supersample is not the culprit - it never engaged in
+either run. What the boot holds is 12.5 MB of Draco decompressing into 1389
+geometries and 3253 accessors before the weld takes them to ~120, with
+three.js generating WGSL for 68 materials on top of it. Taking the show
+flat out of that file (above) takes 1048 nodes and 832 meshes out of the
+peak as well as off the wire.
 
 **Interleave, or be lied to.** The wall clock here swings 30% between page
 loads, which is wider than most of the differences worth chasing. Measuring

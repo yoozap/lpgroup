@@ -30,18 +30,29 @@
 }
 </script>
 
-<!-- The model is 10.9 MB and app.js cannot ask for it until three.js has come
-     down from the CDN and been parsed: about a second in which the only thing
-     on the wire is JavaScript, and then the library sits idle while the model
-     downloads. It is fetched HERE instead, beside the modules, and handed to
-     the loader as an ArrayBuffer - the two travel together on a cold cache.
-     `progress` is what the boot bar reads while it is in flight. If anything
-     about this fails, app.js just loads the model the ordinary way. -->
+<!-- The model cannot be asked for by app.js until three.js has been fetched
+     and parsed: about a second in which the only thing on the wire is
+     JavaScript, and then the library sits idle while the model downloads. It
+     is fetched HERE instead, beside the modules, and handed to the loader as
+     an ArrayBuffer - the two travel together on a cold cache. `progress` is
+     what the boot bar reads while it is in flight.
+
+     Two files, not one. The street is 5.71 MB on the wire and the first frame
+     waits for it; the show flat is another 3.60 MB that that frame does not
+     draw - it stands inside the block, invisible, until somebody hovers a
+     storey. So the flat is asked for only once the street's own fetch has
+     RESOLVED, which keeps the two off the same link at the same time and
+     leaves the first frame as early as it can be. It has until the hover to
+     arrive, which is the second `prepareScene2` was already spending on
+     compiles. See tools/split_glb.py. If any of this fails, app.js loads
+     each file the ordinary way. -->
 <script>
 window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 	var o = { loaded: 0, total: 0 };
-	var p = fetch( './scene.glb' ).then( async function ( r ) {
-		if ( ! r.ok ) throw new Error( 'scene.glb ' + r.status );
+	var split = ! /glbsplit=0/.test( location.search );
+	var first = split ? './scene-street.glb' : './scene.glb';
+	var p = fetch( first ).then( async function ( r ) {
+		if ( ! r.ok ) throw new Error( first + ' ' + r.status );
 		o.total = + ( r.headers.get( 'content-length' ) || 0 );
 		if ( ! r.body ) return r.arrayBuffer();
 		var parts = [], rd = r.body.getReader();
@@ -55,6 +66,14 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 		return all.buffer;
 	} );
 	p.progress = o;
+	/* The show flat, behind the street and never beside it. */
+	p.then( function () {
+		if ( ! split ) return;
+		window.__glbFlat = fetch( './scene-flat.glb' ).then( function ( r ) {
+			if ( ! r.ok ) throw new Error( 'scene-flat.glb ' + r.status );
+			return r.arrayBuffer();
+		} );
+	}, function () {} );
 	return p;
 } )();
 </script>

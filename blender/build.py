@@ -207,6 +207,19 @@ if '--noexport' not in args:
     except Exception as e:
         print('[build] slim_glb skipped:', e)
 
+    # ...and then cut in two. The page does not fetch this file: the first
+    # frame waits for `scene-street.glb` and the show flat's 3.6 MB follows
+    # behind it, because the flat is not in that frame. Without this step a
+    # rebuild leaves the two halves stale while `scene.glb` moves on.
+    try:
+        import subprocess
+        split = os.path.join(os.path.dirname(HERE), 'tools', 'split_glb.py')
+        if os.path.exists(split):
+            print(subprocess.run(['python3', split, outp],
+                                 capture_output=True, text=True, timeout=300).stdout.strip())
+    except Exception as e:
+        print('[build] split_glb skipped:', e)
+
 if '--render' in args:
     sc.render.engine = 'BLENDER_EEVEE'
     try:
