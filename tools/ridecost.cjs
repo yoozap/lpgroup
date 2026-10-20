@@ -22,12 +22,23 @@ const HOVER = /(^|&)hover=1(&|$)/.test( process.argv[ 6 ] || '' );
 const med = ( a ) => { const s = a.slice().sort( ( x, y ) => x - y ); return s.length ? s[ s.length >> 1 ] : 0; };
 const pct = ( a, q ) => { const s = a.slice().sort( ( x, y ) => x - y ); return s.length ? s[ Math.min( s.length - 1, Math.floor( s.length * q ) ) ] : 0; };
 
+/* A FRESH profile per run, wiped first. The dir used to be a fixed
+ * `lp-ride`, which meant two things: a ride that crashed left a
+ * `SingletonLock` behind and every later ride died on "the browser is
+ * already running" (two interleaved A/Bs were lost to that before anyone
+ * noticed the error was in the output file rather than on the console),
+ * and a surviving profile carried Chrome's GPU shader cache from one round
+ * into the next - so the first arm of an A/B booted cold and the second
+ * warm, which is the one thing an A/B must not do. */
+const PROFILE = path.join( os.tmpdir(), 'lp-ride' );
+require( 'fs' ).rmSync( PROFILE, { recursive: true, force: true } );
+
 ( async () => {
 	const b = await puppeteer.launch( { headless: 'new',
 		executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 		args: [ '--enable-unsafe-webgpu', '--use-angle=metal', '--no-first-run',
 			'--window-size=' + W + ',' + H,
-			'--user-data-dir=' + path.join( os.tmpdir(), 'lp-ride' ) ] } );
+			'--user-data-dir=' + PROFILE ] } );
 	const p = await b.newPage();
 	await p.setViewport( { width: W, height: H, deviceScaleFactor: DSF } );
 	const url = 'http://127.0.0.1:8777/index.html' + ( EXTRA ? '?' + EXTRA : '' );
