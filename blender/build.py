@@ -220,6 +220,19 @@ if '--noexport' not in args:
     except Exception as e:
         print('[build] split_glb skipped:', e)
 
+    # ...and the two halves are welded and encoded again, which takes 1.3 MB
+    # off the wire without moving a triangle: the exporter gives Draco a
+    # vertex per corner and a third of them are the same vertex. Needs node;
+    # harmless if it is not there, the halves are just bigger.
+    try:
+        import subprocess
+        weld = os.path.join(os.path.dirname(HERE), 'tools', 'weld_glb.sh')
+        if os.path.exists(weld):
+            print(subprocess.run(['zsh', weld], capture_output=True, text=True,
+                                 timeout=600).stdout.strip())
+    except Exception as e:
+        print('[build] weld_glb skipped:', e)
+
 if '--render' in args:
     sc.render.engine = 'BLENDER_EEVEE'
     try:
