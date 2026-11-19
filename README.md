@@ -1873,6 +1873,79 @@ as a jump - which is exactly how the first attempt was caught: captured with
 `?rail=0`, it was the *solved* shot, a different pose from the one the rail
 starts on, and the hand-off jumped half a street.
 
+### A first visit, which nothing here had ever measured
+
+Every rig in `tools/` wipes its browser profile and calls the boot cold. It is
+not: the operating system keeps every shader a GPU process has compiled in a
+cache of its own, outside the profile - on macOS
+`$(getconf DARWIN_USER_CACHE_DIR)/<bundle id>.helper/com.apple.metal` - so
+those boots found all ~300 of this page's pipelines already built. With that
+cache empty, which is how every real visitor arrives the first time:
+
+    warm frame: recorded in 1231 ms, GPU finished it 25868 ms later
+
+`COLD=1 node tools/hoverwait.cjs` is the rig. It runs Chrome for Testing,
+which has a bundle id and so a cache of its own, and deletes that cache
+before every round. Interleaved, 1600x900 @2, ms from navigation:
+
+|                                   | before | after |
+|---|---|---|
+| page appears                      | 21 650 | 11 860 |
+| first storey open, all of it there | 45 600 | ~22 000 |
+| stalled frames after it appears   | 20 s, worst 2.2 s | 2.4 s, worst 0.27 s |
+| the same boot, OS cache warm      | 2 290 | 1 770 |
+
+The cause is order. `createRenderPipeline()` returns at once and the GPU
+process builds the pipeline when it reaches the call, on its one device
+thread, the next waiting behind it. `createRenderPipelineAsync()` hands the
+build to the driver's workers. three.js only uses it inside `compileAsync()`,
+which awaits each pipeline before asking for the next - the same queue. So
+`pipesGather()` in app.js hooks `backend.createRenderPipeline` and, while a
+warm is on, sends every pipeline down the async call and keeps the promises;
+three.js already skips an object whose pipeline has not landed, so a frame
+rendered in that state asks for everything and draws nothing. Await the lot,
+render again. The boot does that behind the veil (and the bar walks with the
+pipelines that have landed); `warmFlatDraw` does it for the show flat with
+the hero still sweeping. `?pipes=sync` is the old path.
+
+It is 2x, not 8x: Metal compiles in two `MTLCompilerService` processes
+whatever is asked of it (2-2.7 cores busy, measured). The rest of a first
+visit is ~300 pipelines at ~100 ms each, and the only way under that is
+fewer or smaller materials. The hover's deadline (`FLOOR_ARM_MS`) no longer
+fires over pipelines that are still being built - `pipesPending` - or the
+wall would part on furniture arriving piece by piece.
+
+The street frame is not byte identical to the old path: the second render
+fits the sun's frozen cascades 0.05% differently, which moves which leaf
+faces catch the sun. 0.49/255 against a 0.37 floor, all in the crowns.
+
+### The sun's shadow under a ceiling
+
+"It have pixels on shadows." The sun's shadow is two cascades fitted to the
+camera's frustum out to `shadow.camera.far` (420 m) and drawn once. Inside a
+room that put the whole flat in the first cascade at ~6 cm a texel, fitted to
+whatever pose the camera had as it passed through the ceiling. `roomShadow()`
+sets the far plane to 24 m while the camera is under the ceiling (~0.4 cm and
+~1.3 cm a texel) and redraws the map on the frames the view moves. Turning in
+a room: 16.7 ms median before and after, at the same density, for twice the
+triangles. `?roomshadow=0` is the old map. The interior is a different
+picture now - the railing's shadow is bars, the lamp casts one - which is the
+point; interior goldens are stale.
+
+### The model, welded
+
+`tools/weld_glb.sh` (run by `build.py` after the split): Blender gives Draco
+a vertex per corner and a third of them are the same vertex once quantised.
+Welded at zero tolerance and encoded again at the same bits, 9.31 -> 8.03 MB
+on the wire, a third fewer vertices to decode. Checked as multisets of
+exact-float triangles: identical but for 30,187 zero-area ones. On screen the
+flat is under its noise floor (0.62-0.68 against 0.80); the street reads
+0.50/255, leaf facets and reveals on the edge of the shadow bias flipping
+with the new triangle order.
+
+Also: every module of the import graph is `modulepreload`ed (it was two of
+twenty-three, three round trips deep).
+
 ### What is left of the boot, and why
 
 Of the remaining 1.9 seconds, **1.3 is one frame**: the warm-up drawn behind

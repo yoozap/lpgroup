@@ -105,7 +105,7 @@ const __perf = window.__perf = { marks: [], mark( m ) { this.marks.push( [ m, Ma
 } };
 const step = ( p, m ) => { bootbar.style.width = p + '%'; if ( m ) { bootmsg.textContent = m; __perf.mark( m ); } };
 
-let renderer, scene, camera, controls, pipeline, aoPass, clock, fly;
+let renderer, scene, camera, controls, pipeline, aoPass, traaNode, clock, fly;
 let prePass, scenePass;
 let mode = 'hero';
 /* Scene 1 is the street shot of the whole building. Scene 2 opens the
@@ -794,7 +794,7 @@ async function init() {
 	 * soffits and window reveals came back as stairs. Quality here is
 	 * nearly free in a way that per-frame quality never is. */
 	sun.shadow.mapSize.set( SHADOW_PX, SHADOW_PX );
-	if ( sun.shadow.camera ) { sun.shadow.camera.near = 1; sun.shadow.camera.far = 420; }
+	if ( sun.shadow.camera ) { sun.shadow.camera.near = 1; sun.shadow.camera.far = SHADOW_FAR; }
 	sun.shadow.bias = -0.00022;
 	sun.shadow.normalBias = 0.04;
 	// drawn on demand, not every frame: see shadowDirty()
@@ -1076,7 +1076,7 @@ async function warmUp() {
 		 * stands still - otherwise it stops at 88% for the longest part of
 		 * the boot, which is most of what a long load feels like. */
 		bootbar.style.transition = 'width 1.8s cubic-bezier(.2,.7,.3,1)';
-		bootbar.style.width = '99%';
+		bootbar.style.width = PIPES ? '93%' : '99%';   // the rest is `pipesSettled`'s
 		const sw = __q.get( 'shadowwarm' ) !== '0';
 		if ( ! sw && sun ) sun.shadow.needsUpdate = false;
 		/* ...and the show flat rides in that same frame, on the page.
@@ -1119,6 +1119,52 @@ async function warmUp() {
 			};
 		} )() : null;
 		const unglass = warmFloorGlass();
+		/* ...and the pipelines that frame needs are built SIDE BY SIDE first.
+		 * See `pipesGather`: this is the difference between a first visit of
+		 * thirty seconds and one of a few. The first `render()` draws nothing
+		 * and asks for everything; the second, once they have all landed, is
+		 * the warm frame proper. */
+		let tAsked = 0, tBuilt = 0;
+		if ( PIPES ) {
+			pipesGather();
+			pipeline.render();
+			tAsked = performance.now();
+			/* The main thread is free while they build, so for once the bar
+			 * can say something true: it is handed back from the glide and
+			 * walks 93 -> 99% with the pipelines that have actually landed.
+			 * On a visit the OS has seen before that is a few frames; on a
+			 * first one it is most of the boot, and a bar that moves with
+			 * the work is the difference between a load and a hang. */
+			bootbar.style.transition = 'width .25s linear';
+			await pipesSettled( ( done, all ) => {
+				bootbar.style.width = ( 93 + 6 * done / all ).toFixed( 1 ) + '%'; } );
+			tBuilt = performance.now();
+			/* A pass runs its scene once per FRAME id, and only the renderer's
+			 * own loop advances that - which is not running yet. Without this
+			 * the second render redraws the output quad over an empty target. */
+			renderer._nodes.nodeFrame.update();
+			/* The shadow map is drawn once and frozen, and the frame above
+			 * drew it with no casters in it at all. */
+			if ( sw ) shadowDirty();
+			/* ...and the temporal AA starts again from nothing, as it did
+			 * when this was the only frame behind the veil: the frame above
+			 * took the first step of its jitter sequence and left an empty
+			 * picture in its history. The jitter matters more than it
+			 * looks - the sun's cascades are fitted to the jittered frustum
+			 * and then frozen, so a different step is a different phase of
+			 * shadow texels across every tree for the whole visit. A history
+			 * of the wrong size is what makes the node restart it.
+			 *
+			 * It is still not the old frame to the texel: the cascade fit
+			 * comes out 0.05% apart (-0.002088 against -0.002089 in the
+			 * shadow matrix), which moves which leaf faces catch the sun and
+			 * nothing else - 0.49/255 against a 0.37 floor, all of it in the
+			 * crowns. Same map, same resolution, a different phase. */
+			if ( traaNode && traaNode._historyRenderTarget ) {
+				traaNode._jitterIndex = 0;
+				traaNode._historyRenderTarget.setSize( 1, 1 );
+			}
+		}
 		pipeline.render();
 		const tDrawn = performance.now();
 		unglass();
@@ -1136,7 +1182,9 @@ async function warmUp() {
 		bootbar.style.transition = '';
 		if ( __q.get( 'warmlog' ) === '1' )
 			console.info( 'warm frame: recorded in ' + Math.round( tDrawn - tWarm )
-				+ ' ms, GPU finished it ' + Math.round( performance.now() - tDrawn ) + ' ms later' );
+				+ ' ms' + ( PIPES ? ' (asked ' + Math.round( tAsked - tWarm ) + ', '
+					+ pipesBuilt + ' pipelines built in ' + Math.round( tBuilt - tAsked ) + ')' : '' )
+				+ ', GPU finished it ' + Math.round( performance.now() - tDrawn ) + ' ms later' );
 		__perf.mark( 'first frame' );
 	}
 	if ( WARM === 'pass' ) {
@@ -1197,6 +1245,78 @@ async function compileInto( passNode, objs, show = null ) {
 		renderer.setMRT( mrt );
 		compiling = false;
 	}
+}
+
+/* ------------------------------------------- pipelines, side by side
+ * What a FIRST visit actually waits for, and it is none of the things this
+ * file measured for a month. Every rig booted a browser whose profile had
+ * been wiped and called that cold - but the operating system keeps every
+ * shader a GPU process has ever compiled in a cache of its own, outside the
+ * profile (on macOS, `com.apple.metal` under the browser's bundle id), so
+ * those boots found all ~300 of this page's pipelines already built and
+ * took 2 s. With that cache empty, which is how every real visitor arrives:
+ *
+ *     warm frame: recorded in 1231 ms, GPU finished it 25868 ms later
+ *
+ * 29 s before the page appears, and another 20 s of half-second stalls
+ * after it while the show flat's pipelines go the same way.
+ *
+ * The reason is ORDER, not volume. `device.createRenderPipeline()` returns
+ * at once and the GPU process builds the pipeline when it reaches the call -
+ * on its one device thread, the next call waiting behind it: 160 pipelines
+ * at ~120 ms each, end to end. `createRenderPipelineAsync()` hands the same
+ * build to the driver's worker threads, as many at a time as there are
+ * cores. three.js has that path, but only inside `compileAsync()`, which
+ * awaits each pipeline before it asks for the next - so it is the same
+ * queue, one at a time (and `?warm=async`, which went through it, measured
+ * 21 s of waiting for 94 pipelines).
+ *
+ * So the page asks for them itself. While `pipeJobs` is an array, every
+ * pipeline the renderer creates is created through the async call and its
+ * promise is kept here; three.js already skips an object whose pipeline has
+ * not landed (`Pipelines.isReady`), so a frame rendered in that state builds
+ * every node graph, asks for every pipeline and draws nothing. Await the
+ * lot, render again, and that second frame finds them all. It is the render
+ * path itself that asks, so the cache keys cannot disagree with the ones a
+ * frame uses - which is what going through `compileAsync` got wrong.
+ *
+ * One hook, on the backend of a three.js that is vendored and pinned.
+ * ?pipes=sync is the old path, for an A/B. `tools/hoverwait.cjs` with
+ * `COLD=1` is the rig: it is the only one that empties the OS cache. */
+const PIPES = __q.get( 'pipes' ) !== 'sync';
+let pipeJobs = null, pipesHooked = false, pipesBuilt = 0, pipesPending = 0;
+function pipesGather() {
+	if ( ! pipesHooked ) {
+		const be = renderer.backend, make = be.createRenderPipeline;
+		be.createRenderPipeline = function ( renderObject, promises ) {
+			const jobs = promises || pipeJobs, at = jobs ? jobs.length : 0;
+			const out = make.call( this, renderObject, jobs );
+			// how many are still being built, for anything that must not
+			// show an object before its pipeline stands - see `floorTest`
+			if ( jobs === pipeJobs && jobs ) for ( let i = at; i < jobs.length; i ++ ) {
+				pipesPending ++;
+				jobs[ i ].then( () => { pipesPending --; } );
+			}
+			return out;
+		};
+		pipesHooked = true;
+	}
+	if ( ! pipeJobs ) pipeJobs = [];
+}
+/* Wait for everything asked for so far, and stop gathering. A pipeline can
+ * be asked for while the wait is on - nothing here stops a frame - so it
+ * loops until a pass comes back empty. */
+async function pipesSettled( onProgress = null ) {
+	const jobs = pipeJobs;
+	if ( ! jobs ) return;
+	let done = 0, all = 0;
+	while ( jobs.length ) {
+		const j = jobs.splice( 0 );
+		pipesBuilt += j.length; all += j.length;
+		if ( onProgress ) for ( const p of j ) p.then( () => onProgress( ++ done, all ) );
+		await Promise.all( j );
+	}
+	if ( pipeJobs === jobs ) pipeJobs = null;
 }
 
 const nextFrame = () => new Promise( r => requestAnimationFrame( r ) );
@@ -2070,6 +2190,17 @@ async function warmFlatDraw() {
 	const kids = drawn.flatMap( f => f.children );
 	const vis = kids.map( o => o.visible );
 	for ( const o of kids ) o.visible = false;
+	/* The flat's pipelines are built side by side as well - see
+	 * `pipesGather`. On a first visit they were the other half of the wait:
+	 * 150 of them, one behind another on the GPU process' device thread,
+	 * every one a frame the hero stood still for - twenty seconds of stalls
+	 * of up to two seconds each, AFTER the page had appeared. Asked for
+	 * through the async call they are built on the driver's worker threads
+	 * and no frame waits for any of them. The loop below is unchanged and
+	 * now only does the half that was always the page's own - turning each
+	 * object's node graph into WGSL, a chunk a frame - and draws nothing,
+	 * because an object whose pipeline has not landed is skipped. */
+	if ( PIPES ) pipesGather();
 	for ( let i = 0; i < kids.length; ) {
 		const chunk = kids.slice( i, i + ( chunkSize || aim ) );
 		chunk.forEach( ( o, j ) => { o.visible = vis[ i + j ]; } );
@@ -2086,6 +2217,24 @@ async function warmFlatDraw() {
 			Math.round( chunk.length * DRAW_MS / Math.max( 8, tf - tc ) ) ) );
 		for ( const o of chunk ) o.visible = false;
 		if ( sceneNo !== 1 || floorHot > 0 ) break;   // it is wanted for real
+	}
+	if ( PIPES ) {
+		const tp = performance.now();
+		await pipesSettled();
+		/* ...and then every object is drawn once for real, six a frame:
+		 * with its pipeline standing that is a first draw and nothing more,
+		 * and it is what `floorArmed` has always meant - the flat can be
+		 * shown and all of it will be there. */
+		const wanted = () => sceneNo !== 1 || floorHot > 0;
+		for ( let i = 0; i < kids.length && ! wanted(); i += 6 ) {
+			const chunk = kids.slice( i, i + 6 );
+			chunk.forEach( ( o, j ) => { o.visible = vis[ i + j ]; } );
+			invalidate( 2 );
+			await nextFrame();
+			for ( const o of chunk ) o.visible = false;
+		}
+		if ( WARMLOG ) console.info( 'flat pipelines settled and drawn '
+			+ Math.round( performance.now() - tp ) + ' ms after the last was asked for' );
 	}
 	kids.forEach( ( o, i ) => { o.visible = vis[ i ]; } );
 	/* Only put the flats back where they were if nothing has asked for them
@@ -2134,6 +2283,7 @@ const FLOOR_OPEN = + ( __q.get( 'open' ) ?? 0.40 );
  * `?fade=0` is the old hard cut on its own. */
 const FLOOR_FADE = + ( __q.get( 'fade' ) ?? 1.15 );
 const FLOOR_ARM_MS = 2500;   // ...and the longest the hover will wait to arm
+const FLOOR_ARM_CAP = 20000; // ...unless pipelines are still being built: see `floorTest`
 const floorBusy = () => floorSlots.some( s => s.open > 0 || s.want > 0 );
 let floorMap = null, floorHot = 0, xray = null, floorArmed = false, floorArming = false;
 
@@ -2500,7 +2650,20 @@ function floorTest() {
 			 * old one exactly. A flat that fails to load still arms on the
 			 * deadline, because a hover that never answers is worse than
 			 * one that opens on an empty room. */
-			const deadline = () => setTimeout( arm, FLOOR_ARM_MS );
+			/* ...and it does not fire over pipelines that are still being
+			 * BUILT. They are asked for through the async call now (see
+			 * `pipesGather`), and an object whose pipeline has not landed is
+			 * skipped rather than waited for - so arming in the middle of
+			 * that would part the wall on a room the furniture then arrives
+			 * in piece by piece. With the OS shader cache warm nothing is
+			 * ever pending for more than a frame and this changes nothing;
+			 * on a first visit it holds the wall until the flat is whole,
+			 * while the cursor and the floor tag go on answering. Capped,
+			 * for the same reason the deadline exists at all. */
+			const t0 = performance.now();
+			const late = () => ( pipesPending > 0 && performance.now() - t0 < FLOOR_ARM_CAP )
+				? setTimeout( late, 120 ) : arm();
+			const deadline = () => setTimeout( late, FLOOR_ARM_MS );
 			loadFlat().then( deadline, deadline );
 		}
 		/* Not armed is not the same as not answering. The wall must not part
@@ -2971,6 +3134,7 @@ function buildPipeline() {
 
 	// temporal AA resolves the GTAO noise and the leaf edges
 	const stabilised = traa( beauty, prePassDepth, prePassVel, camera );
+	traaNode = stabilised;                  // for the warm-up: see `warmUp`
 	const glow = bloom( stabilised, 0.20, 0.46, 0.90 );
 	// A touch over a pixel of lateral fringing at the frame edge - any more and
 	// it stops reading as a lens and starts reading as an effect, which is
@@ -5156,6 +5320,7 @@ function roomShellGeo( unit ) {
  * flat already comes through here. */
 function roomShellClear() {
 	cityInside( false );              // ...and the street is given back
+	roomShadow( false );
 	walkOff();
 	walkGridSet( - 1 );
 	doorRigClear();
@@ -5232,8 +5397,45 @@ function roomShellStep() {
 	if ( want === roomShellOn ) return;
 	roomShellOn = want;
 	roomShell.visible = want;
+	roomShadow( want );
 	cityInside( want );
 	invalidate( 2 );
+}
+
+/* ------------------------------------------- the sun's shadow, in a room
+ * The sun's shadow is two cascades fitted to what the CAMERA sees, out to
+ * `shadow.camera.far` - 420 m, because the street shot looks down a whole
+ * avenue - and it is drawn once and kept. Both of those are right for the
+ * street and both are wrong under a ceiling:
+ *
+ * - With a near plane of 0.25 m and a far one of 420 the split between the
+ *   two cascades falls at about 110 m, so the WHOLE flat lies in the first
+ *   and shares its 4096 texels with a hundred metres of nothing: three to
+ *   five centimetres a texel. On a wall a metre from the eye that is a
+ *   staircase down every shadow edge and a weave across every surface the
+ *   sun grazes, which is what "it have pixels on shadows" was.
+ * - The one redraw came from `cityInside`, at the instant the camera
+ *   passed through the ceiling on its way down - so the cascades were
+ *   fitted to a pose halfway through a dive and never to the room the
+ *   visitor then stood and turned in.
+ *
+ * In a room the far plane is the length of a flat instead, which puts the
+ * split at about 7 m and a texel at 2 mm in the near cascade and 6 mm in
+ * the far one, and the map follows the camera: it is redrawn on the frames
+ * the view moves and on no others (`frame` asks, off `viewMoved`), so a
+ * visitor standing still pays nothing for it. What it draws while they
+ * turn is the flat alone - the street is not in the scene under a ceiling,
+ * see `cityInside`. ?roomshadow=0 keeps the street's map, =<metres> sets
+ * the reach. */
+const SHADOW_FAR = 420;
+const ROOM_SHADOW = + ( __q.get( 'roomshadow' ) ?? 24 );
+let roomShadowOn = false;
+function roomShadow( inside ) {
+	const want = inside && ROOM_SHADOW > 0;
+	if ( want === roomShadowOn || ! sun || ! sun.shadow.camera ) return;
+	roomShadowOn = want;
+	sun.shadow.camera.far = want ? ROOM_SHADOW : SHADOW_FAR;
+	shadowDirty();
 }
 
 /* ------------------------------------------ the city, from inside a room
@@ -5420,6 +5622,7 @@ function roomSet( i, animate = true ) {
 	 * on it. */
 	if ( n < 0 ) {
 		roomShellOn = false;
+		roomShadow( false );
 		if ( roomShell ) roomShell.visible = false;
 		/* ...and the doors swing back open behind them, to meet the pose
 		 * the plan is drawn in. The rig itself goes when the flight lands
@@ -7211,6 +7414,8 @@ function frame() {
 	if ( shifted && planDrawOwns() ) planBadgeTell();
 	// ...and so do the room dots on the open flat
 	if ( shifted || busy ) { roomDotTell(); roomShellStep(); }
+	// under a ceiling the sun's cascades are fitted to this view: see `roomShadow`
+	if ( shifted && roomShadowOn ) shadowDirty();
 	/* Everything that MOVES the picture says so here, not just the camera.
 	 *
 	 * The two hovers - the storey parting in the street, the flat

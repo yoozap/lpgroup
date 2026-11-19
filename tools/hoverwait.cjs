@@ -18,6 +18,20 @@ const QUERY = process.argv[ 3 ] || '';
 const W = + ( process.argv[ 4 ] || 1600 ), H = + ( process.argv[ 5 ] || 900 );
 const DSF = + ( process.argv[ 6 ] || 2 );
 const MBPS = + ( process.env.MBPS || 0 );
+/* `COLD=1` is the visitor who has NEVER drawn this page. A fresh profile is
+ * not that: macOS keeps every Metal shader a process has compiled in a cache
+ * of its own, per bundle id, outside the profile
+ * (`$(getconf DARWIN_USER_CACHE_DIR)/<bundle>.helper/com.apple.metal`), so a
+ * "cold" round in the installed Chrome still finds all ~300 of this page's
+ * pipelines already compiled and boots in 2 s - where the first boot after
+ * that cache turned over took 27 s, 25 of them inside the warm frame. COLD
+ * runs Chrome for Testing, which has a bundle id and therefore a cache of its
+ * own, and deletes that cache before every round. */
+const COLD = process.env.COLD === '1';
+const CFT = path.join( os.homedir(), '.cache/puppeteer/chrome/mac_arm-153.0.8010.36',
+	'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing' );
+const METAL = COLD ? path.join( require( 'child_process' ).execSync( 'getconf DARWIN_USER_CACHE_DIR' )
+	.toString().trim(), 'com.google.chrome.for.testing.helper', 'com.apple.metal' ) : null;
 const med = ( a ) => { const s = a.filter( x => x != null ).slice().sort( ( x, y ) => x - y );
 	return s.length ? s[ s.length >> 1 ] : null; };
 
@@ -29,8 +43,9 @@ const PT = [ 0.52, 0.26 ];
 async function round( n ) {
 	const dir = path.join( os.tmpdir(), 'lp-hoverwait-' + process.pid + '-' + n );
 	fs.rmSync( dir, { recursive: true, force: true } );
+	if ( COLD ) fs.rmSync( METAL, { recursive: true, force: true } );
 	const b = await puppeteer.launch( { headless: 'new',
-		executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+		executablePath: COLD ? CFT : '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 		args: [ '--enable-unsafe-webgpu', '--use-angle=metal', '--no-first-run',
 			'--window-size=' + W + ',' + H, '--user-data-dir=' + dir ] } );
 	const p = await b.newPage();

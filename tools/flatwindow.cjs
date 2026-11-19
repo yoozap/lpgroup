@@ -80,7 +80,12 @@ async function run( how ) {
 	 * place every second; the only reliable way in is to sweep until the
 	 * page itself says a storey is lit. */
 	const findFacade = async () => {
-		for ( let pass = 0; pass < 3; pass ++ ) {
+		/* ...and for as long as it takes, not for three passes. A storey
+		 * only reads as lit once the hover is ARMED, and at 4 Mbps that is
+		 * some seconds after the veil - three passes ran out a second or two
+		 * either side of it, so the click route came back "never found the
+		 * facade" about one run in three and the run was vacuous. */
+		for ( const t0 = Date.now(); Date.now() - t0 < 40000; ) {
 			for ( let fy = 0.22; fy <= 0.72; fy += 0.05 ) {
 				for ( let fx = 0.40; fx <= 0.92; fx += 0.04 ) {
 					await p.mouse.move( W * fx, H * fy );
