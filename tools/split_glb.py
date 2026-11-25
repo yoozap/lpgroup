@@ -34,7 +34,11 @@ geometry) or at least one (materials, which may be shared).
 import json, struct, sys, os, collections
 
 JSON_CHUNK, BIN_CHUNK = 0x4E4F534A, 0x004E4942
-IS_FLAT = lambda name: (name or '').startswith('flat')
+# 'flat*' was the show flat; 'in_*' are the plan-driven interiors
+# (blender/plans/CONTRACT.md). Neither belongs in the street file. Since the
+# real-plan rebuild the street build carries neither, and only the street
+# file is written - the other side is written again the day it has nodes.
+IS_FLAT = lambda name: (name or '').startswith('flat') or (name or '').startswith('in_')
 
 
 def read_glb(path):
@@ -288,6 +292,9 @@ def main():
     out = {}
     for want, name in (('street', 'scene-street.glb'), ('flat', 'scene-flat.glb')):
         keep = keep_for(want)
+        if not any(side[i] == want for i in keep):
+            print('  %-18s nothing on this side - not written' % name)
+            continue
         # an ancestor kept only to carry children must not drag its mesh along
         doc, blob = build(js, bin_, keep, want)
         for i, old in enumerate(sorted(keep)):
@@ -304,7 +311,10 @@ def main():
     print('  first frame now waits for %.2f MB instead of %.2f'
           % (out['street'][1] / 1e6, a / 1e6))
 
-    if '--check' in sys.argv:
+    if '--check' in sys.argv and 'flat' not in out:
+        print('\ncheck: one side only; street has %d nodes of %d'
+              % (len(out['street'][2]['nodes']), len(nodes)))
+    elif '--check' in sys.argv:
         print('\ncheck:')
         s, f = out['street'][2], out['flat'][2]
         named = lambda d: {n.get('name') for n in d['nodes'] if n.get('name')}

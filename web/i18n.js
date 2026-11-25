@@ -83,6 +83,9 @@ export const KA = {
 
 	/* ----------------------------------------------------- the numbers */
 	'Floors': 'სართული',
+	'Residential floors, over shops and offices': 'საცხოვრებელი სართული, მაღაზიებისა და ოფისების ზემოთ',
+	'Flats in two blocks, <span class="hi"><span data-v="available">17</span> still available</span>':
+		'ბინა ორ ბლოკში, <span class="hi">მათგან <span data-v="available"></span> თავისუფალი</span>',
 	'Flats, <span class="hi"><span data-v="available">17</span> still available</span>':
 		'ბინა, <span class="hi">მათგან <span data-v="available"></span> თავისუფალი</span>',
 	'Built': 'აშენებულია',
@@ -115,6 +118,8 @@ export const KA = {
 	/* --------------------------------------------------- availability */
 	'Availability': 'თავისუფალი ბინები',
 	'Choose your flat — live availability': 'აირჩიეთ ბინა — სტატუსი რეალურ დროში',
+	'<span data-v="flats">191</span> flats in two blocks with three entrances, on <span data-v="floors">9</span> floors over the shops and offices. Green is available, amber is reserved, grey is sold.':
+		'<span data-v="flats"></span> ბინა ორ ბლოკში, სამი სადარბაზოთი, <span data-v="floors"></span> სართულზე, მაღაზიებისა და ოფისების ზემოთ. მწვანე — თავისუფალია, ყვითელი — დაჯავშნილი, ნაცრისფერი — გაყიდული.',
 	'Click a floor on the building, then a flat on the plan. Green is available, amber is reserved, grey is sold.':
 		'დააჭირეთ სართულს შენობაზე, შემდეგ კი ბინას გეგმაზე. მწვანე — თავისუფალია, ყვითელი — დაჯავშნილი, ნაცრისფერი — გაყიდული.',
 	'<i class="dot-available"></i>Available': '<i class="dot-available"></i>თავისუფალი',
@@ -288,7 +293,6 @@ export const KA = {
 	 * would have wrapped it. */
 	'White frame: plastered walls, screed floors, wiring and plumbing brought to every room, glazed windows and a steel entrance door. Ready for your own finish.':
 		'თეთრი კარკასი: შელესილი კედლები, მოჭიმული იატაკი, ყველა ოთახში შეყვანილი ელექტროგაყვანილობა და სანტექნიკა, შემინული ფანჯრები და რკინის კარი. მზადაა თქვენი რემონტისთვის.',
-	'Yes - underground, 48 spaces, sold separately.': 'დიახ — მიწისქვეშა, 48 ადგილი, იყიდება ცალკე.',
 	'Pharmacy and a grocery': 'აფთიაქი და სასურსათო მაღაზია',
 	'School': 'სკოლა',
 	'Kindergarten': 'საბავშვო ბაღი',
@@ -299,13 +303,23 @@ export const KA = {
 	'TBC Bank': 'თიბისი ბანკი',
 	'Bank of Georgia': 'საქართველოს ბანკი',
 	'Liberty Bank': 'ლიბერთი ბანკი',
-	'1-bedroom': '1-ოთახიანი',
-	'2-bedroom': '2-ოთახიანი',
-	'3-bedroom': '3-ოთახიანი',
-	'Street, south-west': 'ქუჩისკენ, სამხრეთ-დასავლეთი',
-	'Courtyard, east': 'ეზოსკენ, აღმოსავლეთი',
-	'Street, north': 'ქუჩისკენ, ჩრდილოეთი',
-	'Courtyard, west': 'ეზოსკენ, დასავლეთი',
+	/* BEDROOMS, which is what the English counts. "2-ოთახიანი" - the
+	 * Georgian market's "two-room" - counts the living room too, so it
+	 * named a 1-bedroom flat as a 2-bedroom one's neighbour; said as
+	 * bedrooms the two languages now count the same rooms. */
+	'1-bedroom': '1-საძინებლიანი',
+	'2-bedroom': '2-საძინებლიანი',
+	'3-bedroom': '3-საძინებლიანი',
+	/* which way a flat looks: the page joins the plan's compass letters
+	 * itself (`aspectText`), so every combination is covered by these five */
+	'north': 'ჩრდილოეთი',
+	'south': 'სამხრეთი',
+	'east': 'აღმოსავლეთი',
+	'west': 'დასავლეთი',
+	' and ': ' და ',
+	'a balcony or loggia in every flat': 'აივანი ან ლოჯია ყველა ბინაში',
+	'Yes - {u} underground spaces on level -1, and {o} outdoor spaces around the building.':
+		'დიახ — {u} მიწისქვეშა ადგილი -1 დონეზე და {o} ღია ადგილი შენობის გარშემო.',
 
 	/* ------------------------------------------- what the page builds
 	 * Templates, not sentences: `{n}` is a number and Georgian is free to
@@ -338,6 +352,34 @@ export const KA = {
 	'{n} months': '{n} თვე',
 	'{down} down, {rest} over {n} months.': '{down} პირველადი შენატანი, დანარჩენი {rest} — {n} თვეში.',
 	'{n} of {all}': '{all}-დან {n}',
+	'Floor {n} of {all}': 'სართული {n} ({all}-დან)',
+	'{n} flats · all taken': '{n} ბინა · ყველა დაკავებულია',
+	'block {b}': 'ბლოკი {b}',
+	'Flat {n}': 'ბინა {n}',
+	'Flat': 'ბინა',
+	'Block': 'ბლოკი',
+	'Entrance': 'სადარბაზო',
+	'Block {b} · entrance {e}': 'ბლოკი {b} · სადარბაზო {e}',
+	'{b} · entr. {e}': '{b} · სად. {e}',
+	'Area': 'ფართი',
+	'{inner} + {balcony} m²': '{inner} + {balcony} მ²',
+	'flat {n}, floor {f}, block {b}': 'ბინა {n}, სართული {f}, ბლოკი {b}',
+	'flat {n}, floor {f}': 'ბინა {n}, სართული {f}',
+	'Bedrooms': 'საძინებელი',
+	'Show': 'ჩვენება',
+	'All': 'ყველა',
+	'Type': 'ტიპი',
+	'Price': 'ფასი',
+	'Status': 'სტატუსი',
+	'<b>{n}</b> of {all} flats': '{all}-დან <b>{n}</b> ბინა',
+	'Plan of the flat': 'ბინის გეგმა',
+	'This layout, furnished': 'ეს გეგმარება, ავეჯით',
+	'See it in 3D': 'ნახეთ 3D-ში',
+	'Walk the show flat': 'დაათვალიერეთ საჩვენებელი ბინა',
+	'Living area': 'საცხოვრებელი ფართი',
+	'Loggia': 'ლოჯია',
+	'Total': 'სულ',
+	'Not decided yet': 'ჯერ არ გადამიწყვეტია',
 	'Please tell us your name.': 'გთხოვთ, მიუთითოთ სახელი.',
 	'A phone number we can call back on.': 'ტელეფონის ნომერი, რომელზეც დაგირეკავთ.',
 
@@ -359,6 +401,48 @@ export const KA = {
 	'Hall': 'ჰოლი',
 	'Living balcony': 'მისაღების აივანი',
 	'Bedroom balcony': 'საძინებლის აივანი',
+
+	/* the real building's floor view: offices, and a room the plan left
+	 * unnamed (plan_meta has nine), and the rooms' own names where
+	 * rooms_lite.json has no Georgian for them */
+	'Office': 'ოფისი',
+	'Offices': 'ოფისები',
+	'Office {n}': 'ოფისი {n}',
+	'Office space': 'საოფისე ფართი',
+	'Room': 'ოთახი',
+	'Living room with kitchen': 'მისაღები სამზარეულოთი',
+	'Bedroom': 'საძინებელი',
+	'Bedroom 1': 'პირველი საძინებელი',
+	'Bedroom 3': 'მესამე საძინებელი',
+	'Bathroom 1': 'პირველი სველი წერტილი',
+	'Bathroom 2': 'მეორე სველი წერტილი',
+	'Studio room': 'სტუდიო',
+	'Storage': 'სათავსო',
+	'WC': 'ტუალეტი',
+
+	/* on foot (app.js "walking the building") */
+	'Walk it': 'გაიარეთ ფეხით',
+	'Walk in': 'შედით',
+	'Walk in: <a href="#walk-C1" data-walkin="1">Entrance 1</a> <a href="#walk-C2" data-walkin="2">Entrance 2</a> <a href="#walk-C3" data-walkin="3">Entrance 3</a>':
+		'შედით შენობაში: <a href="#walk-C1" data-walkin="1">სადარბაზო 1</a> <a href="#walk-C2" data-walkin="2">სადარბაზო 2</a> <a href="#walk-C3" data-walkin="3">სადარბაზო 3</a>',
+	'Entrance {k}': 'სადარბაზო {k}',
+	'Terrace stairs': 'ტერასის კიბე',
+	'Click to walk in': 'დააწკაპუნეთ შესასვლელად',
+	'Leave': 'გასვლა',
+	'Ground floor': 'პირველი სართული',
+	'Ground': 'პ',
+	'Roof': 'სახურავი',
+	'Corridor': 'დერეფანი',
+	'Entrance hall': 'შესასვლელი ჰოლი',
+	'Stairs': 'კიბე',
+	'Stair head': 'კიბის თავი',
+	'Lift': 'ლიფტი',
+	'Terrace': 'ტერასა',
+	'Commercial floor': 'კომერციული ფართი',
+	'Street': 'ქუჩა',
+	'Doorway': 'კარი',
+	'Click, then move the mouse to look (Esc frees the cursor) · <b>W A S D</b> to walk · <b>Shift</b> to hurry · on a phone the left thumb walks':
+		'დააწკაპუნეთ და მაუსით მიმოიხედეთ (Esc — კურსორი) · <b>W A S D</b> — სიარული · <b>Shift</b> — აჩქარება · ტელეფონზე მარცხენა თითით დადიხართ',
 
 	'Pick a flat on the left and its plan, aspect and price appear here. Everything green can be seen on site today.':
 		'აირჩიეთ ბინა მარცხნივ და აქ გამოჩნდება მისი გეგმა, ხედი და ფასი. ყველა მწვანე ბინის ნახვა დღესვე შეგიძლიათ ადგილზე.',

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Camera + massing solved from the reference photograph.
+"""Camera + massing solved from the reference photograph, and where the real
+building stands in that world.
 
 Method (see CAMERA_FIT.md):
   * roof silhouette traced by sky segmentation  -> two vanishing lines
@@ -21,9 +22,23 @@ ASPECT   = IMG_W / FULL_H
 LENS_MM  = 36.0 * F_PX / IMG_W                          # 25.15 mm on 36 mm
 SHIFT_Y  = (IMG_H / IMG_W) * (PPY / IMG_H - 0.5)   # Blender vertical rise
 
-# block A, in Blender world space (Z up, camera at origin looking +Y)
+# the old photo-fitted block A, in Blender world space (Z up, camera at the
+# origin looking +Y): its street/gable arris at pavement level, and bearing
 A_ORIGIN = (-11.10, 70.32, 0.0)     # street/gable arris at pavement level (arris at u=797)
 A_BEARING = 53.07      # deg about +Z; parapet line fits within 1.6 px over its length
+
+# The real building (blender/plans/plan.json) is placed so that its own
+# south-west arris - the light west gable (x = -0.25) meeting the bar's south
+# face (y = 18.25), plan frame - stands exactly where the photo fit put that
+# arris, on the same bearing. The sun, the sky and the street therefore light
+# the shopfront street and the bar's south face as they always did.
+# BuildingRoot's local frame is the plan frame with y negated: (x, -y, z).
+BEARING = A_BEARING
+_ARRIS_LOCAL = (-0.25, -18.25)
+_c, _s = math.cos(math.radians(BEARING)), math.sin(math.radians(BEARING))
+ROOT_ORIGIN = (A_ORIGIN[0] - (_c * _ARRIS_LOCAL[0] - _s * _ARRIS_LOCAL[1]),
+               A_ORIGIN[1] - (_s * _ARRIS_LOCAL[0] + _c * _ARRIS_LOCAL[1]),
+               0.0)
 
 SUN_ELEV = 58.0
 SUN_AZI  = -30.6       # degrees in the Blender XY plane (sun behind-right of camera)
@@ -32,4 +47,4 @@ if __name__ == '__main__':
     print('lens  %.3f mm' % LENS_MM)
     print('shift_y %.6f' % SHIFT_Y)
     print('fov_y %.4f deg  aspect %.6f  fullH %.1f' % (FOV_Y, ASPECT, FULL_H))
-    print('bearing %.4f' % A_BEARING)
+    print('bearing %.4f   root origin %s' % (BEARING, ROOT_ORIGIN))

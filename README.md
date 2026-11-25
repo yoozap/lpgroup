@@ -34,7 +34,238 @@ Rebuild the model after editing anything under `blender/`:
 # (--out <path> to render elsewhere, --noexport to skip the GLB)
 ```
 
+## The real building, from the architect's plans
+
+The page used to show a building fitted to one photograph, with one invented
+show flat in it. It now shows the building the architect drew: both blocks
+from the full plan set, every flat under its own number, the entrance halls,
+the stairs and lifts, the rooms as the plans furnish them, and a visitor can
+walk through all of it from the street. Everything below this section that
+talks about the photo fit, the 3.0 m storey or the show flat is the history
+of how the look was won; the look is kept, the geometry is the plans'.
+
+### From the PDF to the files
+
+```
+blender/plans/plans.pdf            13 A3 sheets, vector
+  -> tools/plan_extract.py         -> blender/plans/plan.json   (+ check/level_XX.png)
+  -> tools/plan_rooms.py           -> blender/plans/rooms.json  (room kinds, names ka/en,
+                                                                 the furniture the plan draws)
+  -> tools/gen_flats.py            -> web/flats.js, web/flatplans.json  (the 191 flats for sale)
+  -> tools/gen_rooms_lite.py       -> web/rooms_lite.json       (room labels and stances for the page)
+  -> blender/build.py              -> web/scene-street.glb, web/scene_meta.json
+  -> blender/build_furnish.py      -> web/interior/furn/<LEVEL>.glb, furn/index.json
+  -> blender/build_interior.py     -> web/interior/L00 .. L10.glb, cores.glb,
+                                      web/plan_meta.json (+ plan_meta/<LEVEL>.json, index.json)
+```
+
+`build_interior.py` runs after `build_furnish.py` (plan_meta's `nav.furn` is
+read off the furniture files). Every build takes `--out`/`--meta` (or is run
+in a scratch copy of the repo) so served files are swapped in one step.
+`blender/plans/CONTRACT.md` is the one place the frames, ids, file contents,
+node names and seams are fixed; read it before changing any of these.
+
+* **One frame.** Plan metres, origin on axes a x 1 at +0.000, `x` along the
+  lettered axes (a..J, 0..82.5), `y` along the numbered ones (+y is the
+  shopfront street), `z` the level label. Blender builds `(x, -y, z)`;
+  `scene_meta.json -> frame` gives the browser's `world = origin + ex*x +
+  ey*y + up*z`, and the page converts plan metres with that and nothing else.
+* **Blocks.** A is everything west of the i|k expansion joint (x < 44.4),
+  B everything east of it including the wing - one constant to flip. The
+  floor view shows a storey as one whole floor (owner's decision); the A/B
+  split survives only in node names and data.
+* **Levels.** `L00` commercial (0.0, 4.8 m), `L01` offices (+4.8), `L02`..`L10`
+  the nine residential floors at 3.3 m ("floor 1".."floor 9" to a buyer),
+  roof +37.8, stair heads +40.2. Cores `C1` (A), `C2` and `C3` (B), and the
+  terrace stair `podium`.
+* **Flats** are the plan's own numbers as strings (`"37"`, `"47-a"`); a
+  number the plan skips is not invented.
+
+### What each build owns
+
+* `build.py` (with `lib_building.py`, `lib_city.py`): the envelope of both
+  blocks storey by storey from each level's outline, openings and balcony
+  polygons; the podium from the +0.000 outline; terrace, signs, streets and
+  the neighbours. It owns the outside wall within 0.25 m of the outside
+  (`EXT`) and stops inside the plan's 0.206 m wall poche, so the interior's
+  lining is what a room sees. Inside the outline it builds no floor and no
+  ceiling: its slabs sit above the interiors' ceilings (roof underside +37.65
+  over the L10 ceilings at +37.50; +4.55 over the L00 ceilings at +4.50) and
+  leave the cores open.
+* `build_interior.py` (with `lib_plan.py`): one GLB per level and one for the
+  three cores, in the same frame with real z; `plan_meta.json` carries per
+  level the flats, rooms, doors (hinge, width, shut and open angles), the
+  corridor and the walkable navigation (`nav.walk`, `solid`, `ramps`,
+  `lifts`, `furn`), the cores and lifts, and the four street `portals`.
+* `build_furnish.py` (with `lib_furnish.py`): the furniture `rooms.json`
+  reads off the drawings, one instanced node per piece, plus a kitchen-run
+  module the sheets do not draw (sink, hob, wall units; flagged
+  `drawn:false`).
+
+### The street file, piece by piece
+
+* **Envelope.** Each storey of each block is built from its level's outline,
+  openings and balcony polygons. L01, the +4.8 office floor, wears L02's
+  facade, because every render shows it that way. Its interior is built from
+  its own sheet, where the offices run out to the face line behind long glazed
+  runs. So on L01 any loggia whose volume lies inside an office or the
+  corridor is built *one-way*: from the street the same loggia, from the
+  office no back wall, no glass, no cheek backs - the bay reads as part of the
+  room. An open doorway is cut where the wing's corridor door `d9` leads onto
+  the terrace; where a glazed run met plain wall there was room for one
+  standard window. In every loggia the floor you walk on is the interior's;
+  the street's `lgfloor` is the slab under it, 3 cm lower in a one-way bay.
+* **No block mass.** The old black filler box stood inside every flat and is
+  gone (`LP_MASS=1` brings it back); all glass on the page is opaque.
+* **Podium and entrances.** The doors follow plan_meta's `portals`. C1 and C2
+  are single doors in a blank plinth; C3 and the terrace stair are glazed
+  pairs. In front of each entrance hall the street keeps only a 7 cm skin
+  outside the outline - the hall's wall is the interior's. Every core door has
+  a dark steel portal, a cantilevered canopy and its number over it in
+  geometry ("1", "2", "3", "TERRACE"). The three pairs of shop doors the
+  +0.000 sheet draws (`S1`, `S2` on the north face, `S3` on the west) are real
+  openings in the shopfronts with a bronze frame and glass over them. All
+  street leaves are stand-ins (`podium_door_<id>_leaf`, `_leaf_glass`, listed
+  in `scene_meta.site.entrances` with a `kind`: core, terrace, commercial)
+  that come away when L00 is in and the interior's own leaves take over.
+* **The terrace** (+4.8, after render 005): five planter-benches with trees,
+  a paved promenade with its channel, six cafe sets under butterfly umbrellas,
+  two pergolas, two shade sails, three tree tubs, and the stair house. The
+  terrace stair rises through a hole in the deck at y 29.05..34.53 (read off
+  the interior's stair in plan_meta) into a 2.75 m house round it; its door is
+  the interior's L01 `d12`. Everything repeated is a hidden kit placed as
+  linked duplicates; `scene_meta.site.terrace.solids` lists every footprint
+  on the deck for the walk.
+* **Streets and city.** Four streets with zebras; the neighbour rows stop
+  short of every junction, where the architect's cameras 002-004 stand.
+
+### The interiors
+
+* **Per level:** walls, lining and skirting (`int_white_gloss` inside each
+  owner's walls node), parquet / tile / stone floors with marble thresholds,
+  ceilings at z + h − 0.30, door frames and hinged leaves (`_swing__` nodes,
+  hinge in plan_meta), glazed loggia leaves, loggia tiles at z + 0.02.
+* **Cores:** stairs per storey with half landings, four lift shafts with cars
+  and landing doors, the stair heads on the roof. Every car stops at L00 on
+  the side the sheet draws.
+* **Entrance halls as drawn:** the +0.000 sheet draws the halls' inner walls
+  as outlines; the extractor reads them (`hall_partitions`), so C1 and C2 are
+  street door -> vestibule -> lift lobby -> stair, plus a double door to the
+  south lift hall; C3 opens west onto the commercial floor.
+* **Made doors** (`made: true` in plan_meta, the sheet draws none there):
+  the bedroom of the flat next to the wing on every storey (12, 33, 54, 75,
+  96, 117, 138, 159, 180 - sealed on every sheet), the front doors of 128,
+  129, 140, 141 on +27.900 (copied from the same flats one storey down), the
+  L01 openings onto the terrace (`d11`, `d12`), and C3's 2.49 m street double
+  door (the sheet draws a wall there).
+* **Furniture:** every drawn symbol except the vent ducts, on its glyph, in
+  its room, facing the drawn way. Kitchen legs whose drawn zone runs over a
+  column or duct are clipped to the room's free floor (192 legs; nothing pokes
+  into the next flat or the corridor any more); the coffee table is a clean
+  procedural piece. Deliberately not placed, listed in `furn/index.json ->
+  omitted`: the nightstand the 33/54/75/96/117/138/159/180 stack draws across
+  the bedroom wall into the hall (there are 0.2 m between that wall and the
+  bed).
+
+### The page's side
+
+* `web/levels.js` + app.js "the real levels": a level's GLB is fetched,
+  welded per material and compiled before it is shown, at most a few levels
+  plus the cores stay resident. The street hover is a lit band per level; the
+  floor view cuts at z + 1.45 and caps the cut in ink from `nav.solid`, with a
+  badge per flat carrying its real number and area. A flat opens on click,
+  through `LP.openFlat(n)` or at `#flat-37`; furniture grows in for the open
+  flat only.
+* **Walking** (`web/walk.js` + app.js "walking the building"): from a room
+  dot, a street door, the hero's "Walk in" links, `#walk-C1` or
+  `LP.walk(...)`. Doors swing and latch, lifts ride with their landing doors,
+  stairs climb, furniture over 0.4 m is solid. **The gate:** a body is never
+  let onto a surface of a level whose geometry is not on screen, and a car
+  waits short of a storey whose walls are not in. The street's loggia panes
+  and stand-in door leaves are hidden for what the walk has on screen.
+
+### The seams, and what checks them
+
+Each check below was shown to fail on a broken state.
+
+* `tools/plancheck.py` (dump in Blender, judge in python): flat areas vs the
+  plan, every flat has an entrance, every room reachable through door
+  throats, stairs connected, lift stops on a corridor, portals onto a hall,
+  halls split into their drawn rooms, skirting present, `nav.furn` present,
+  no L00 ceiling over a flight. 0 problems.
+* `tools/plan_ceilcheck.py` (Blender): rays up from 30 room points per level
+  (L00 halls, L01 offices, L02..L10 flats) must first meet that level's own
+  ceiling with nothing within 3 cm behind it; rays up over every grade flight
+  must meet the interior or the stair house. On the build-3 files: 54/330 bad
+  (L10: the roof slab coplanar with every ceiling; L00: the +4.45 slabs under
+  the hall ceilings) and 72/72 stairwell rays hitting a street slab. Now 0.
+* `node tools/walkbuilding.cjs engine`: walks to all 191 flats and 12 offices
+  (1031/1031 rooms) with the furniture solid, up every stair, into every lift
+  and through all four portals and the three shop doors, with 0 wall / riser /
+  floor / leaf violations. `--break=bigfurn` and others make it FAIL.
+* `tourcheck.cjs` (two scripted tours in the real page, 0 hole frames; FAILs
+  with the gate off), `levelcheck.cjs`, `walkcheck.cjs`, `smoke.cjs`,
+  `sitecheck.cjs`: the page's own rigs.
+* Street checks in Blender: every loggia's own back wall is the first thing
+  behind its mouth (0/266 bad); every street door - core, terrace and shop -
+  is clear once the stand-in leaves are hidden (the shop doors were blocked
+  by mullions before build 4); a terrace walk check gets a 0.24 m body from
+  the stair house and from `d9` to every bench, cafe set and both promenade
+  ends.
+* Furniture: a footprint check against each room's free floor and the wall
+  poche (138 pieces outside / 93 into the poche in build 2 -> the 2 walk-in
+  showers drawn L-shaped round a column, flats 16 and 121), overlaps beyond
+  the drawing (0), and per-level counts equal to the sheet's symbols (minus
+  `omitted`). Every level's furniture was also laid over its sheet and looked
+  at flat by flat (build 4: all ten levels, bar and wing).
+* Street looks are compared by image diff from the architect's cameras and
+  the page's opening shot, against a noise floor of two captures of one build.
+
+### Known rough edges
+
+* Interiors read flat and grey-blue, lit by the sky alone (the materials.js
+  look); a look question for the owner.
+* The first arrival of a level or its furniture can hold the frame for 1-2 s
+  while it compiles; on a slow link a car waits mid-shaft for the next storey.
+* 41 bathroom door leaves sweep a drawn corner shower, and a few doorway
+  pieces are walk-through (corner showers, the 33-stack's second bed): the
+  architect's drawing, left as drawn.
+* The interior's wall in front of the C1/C2 halls stands up to 6 cm outside
+  the plinth face; the street's skin covers it, but the two are near.
+* The terrace stair house is now as long as the stair (5.9 m, was 4.65 m) and
+  shows a little more over the parapet from the south street.
+* P-1 (parking, −3.000) is in plan.json but not built.
+* Not tested on a real touch device or in Safari.
+
+### What the plans do not say / owner decisions pending
+
+* **Prices and availability** - not in the plans; the page shows none.
+* **Compass north** - the sheets carry no north arrow; the sun and the
+  street names are the photo fit's.
+* **Block naming** - "A" west / "B" east incl. the wing is an assumption.
+* **L01 facade vs its sheet** - the renders show L01 in the residential
+  facade, the sheet has flush glazed office runs; kept as the renders
+  (some dark piers stand inside the offices' glazed runs).
+* **West gable light vs dark** - materials.js `plaster_light` renders dark.
+* **Hero candidates** - `?hero=square_9m|front_eye|sw_corner_eye`; the
+  default is unchanged until the owner picks.
+* **Flats the plan numbers but does not draw:** 18, 19, 123, 124, 142, 165,
+  166 - not invented.
+* **Split flats `N` / `N-a`** (47/47-a, 74-a, 89-a, 95-a ...) - shown as the
+  sheet splits them.
+* **Flat 121 has no kitchen drawn** (sofa, table and TV only).
+* **Bedrooms drawn without a window:** 4, 25, 46, 67, 88, 109, 130, 151, 172.
+* **The made doors** listed above (nine bedrooms, four +27.900 front doors,
+  two L01 terrace openings, the C3 street double door) - the sheets draw
+  none there.
+* **The "TERRACE" plate** is English; it could be Georgian or a pictogram.
+* **The 33-stack's second nightstand** - drawn across a wall, left out.
+
 ## The camera
+
+*Historical: the photo fit. The building is now built from the plans (see
+above); the fitted bearing and the arris position are kept, because the sun,
+the sky and the street were tuned to them.*
 
 Everything is anchored to a camera solved from the reference photograph rather
 than eyeballed. The numbers live in `blender/fit.py` and are repeated at the top
@@ -97,6 +328,10 @@ The lens shift is applied straight to the projection matrix
 it out. Verticals stay vertical; the horizon sits 86% of the way down the frame.
 
 ## What is generated
+
+*Historical in its sizes: the bay rhythm, the kit and the layering below
+carry over, but every position and size now comes from the plans (see "The
+real building, from the architect's plans").*
 
 `blender/lib_building.py` builds the two residential blocks bay by bay. The bay
 rhythm is the one read off the photograph: a loggia on the corner, a pair of
@@ -2106,6 +2341,10 @@ between runs - take medians of several, and never judge a setting on one run.
 
 ## Scene 2 - the show flat
 
+*Historical: the invented show flat is no longer built (app.js stubs it
+behind `FLAT_GONE`); the real flats come from `web/interior/`. Kept for what
+it learned about the cut, the floor view and walking.*
+
 The second button in the HUD opens the top-floor corner flat: the unit the
 bay rhythm puts on the corner, loggia - window - window - loggia, 11.5 m along
 the street, with the building's own mass standing full height beside its party
@@ -2419,6 +2658,9 @@ floor view slides under the drag, and inside a room they are legs.
 
 ## Matching the photograph
 
+*Historical: the photo-fit comparison. The real building is compared with
+the architect's own renders (001-006) from their solved cameras instead.*
+
 `index.html` and the reference are compared numerically, region by region,
 after every change. Measure facades on the **median**, not the mean: the mean
 of any facade box is dragged up by the windows, and that masked a gable that
@@ -2459,3 +2701,65 @@ the shadows - worth isolating before any more albedo is spent on it.
 
 The sky is deliberately left alone. It feeds the IBL through PMREM, so moving
 it re-lights every surface and invalidates every number above.
+
+## The neighbourhood (`blender/lib_hood.py`)
+
+Everything round the block that the architect's renders show, vehicles and
+people left out: cream stone perimeter blocks on a grid of streets two rings
+deep (dark shopfronts, a giant order over two storeys, cornices, smooth
+upper floors that step back, hipped roofs, nine-storey corner towers), the
+planted square along the far side of the main street, avenues of trees,
+lamp columns, corner beds behind timber-slat fences, benches.
+
+- A bar of building is generated once per `(type, bays, lod, variant)` and
+  placed as linked duplicates; bars further than `LOD_R` (150 m) from the
+  site get flush panes and no reveals, rails or capitals.
+- Five materials of its own, so the block's stone and curb keep their look:
+  `hood_panel` (honed 0.66 m panels in stack bond, 5 courses a storey, 22 mm
+  drawn joints), `hood_stone_low` (rough granite ashlar on the order and the
+  storeys under the panels: 0.165 m courses, 0.30-0.45 m blocks, rain
+  streaks, a grime band under each cornice), `hood_roof` (pale zinc, standing
+  seams every 0.45 m), `hood_shopglass` (dark glass, black piers, fascia and
+  mullions - one surface) and `hood_awning` (navy canvas). Colours and
+  sizes were sampled from renders 001-005. Everything is laid out from world
+  position (no UVs); each joint is box-filtered by its screen width, so from
+  the air it settles to the face's mean tone instead of moire. The one map is
+  `web/tex/hood_grain.webp` (380 KB, generated seamless granite speckle,
+  grey, mean 0.5). Interleaved A/B against the old plaster looks
+  (`fpsmax index.html 1600 900 2`): 29.9 vs 33.0 ms at pr 2, 13.4 vs 14.4 ms
+  at pr 1 - cheaper than `renderPlaster`'s six noises.
+  Storeys sit on the building's own 4.80 + n x 3.30 grid, which is the grid
+  the panel courses are laid on.
+- The square is kept low and lamp-free between the page's rail and the
+  building (`clear()` and the tree rows in `build_hood_trees`).
+- `LP_NOHOOD=1` builds the old four rows of plain blocks instead, for an A/B.
+  Measured with `tools/fpsmax.cjs index.html 1600 900 2`: 36.5 -> 38.9 ms at
+  pr 2, 15.1 -> 20.0 ms at pr 1 (952 k -> 1.33 M faces; nothing is frustum
+  culled after the weld, so every face is paid for in every frame).
+- Second pass against the renders (001_L, 002_L): the panels now run down
+  to the order's cornice and only the order and the ground storey are
+  granite, so a block no longer reads as two buildings stacked; both stones
+  are warmer (`#cbbcaa` panels, `#9a8a76` granite) and further apart; the
+  panel joints are softer (16 mm, 0.30 darkening) and the granite finer
+  (speckle at 0.7 m, firmer joints, fainter streaks). The upper windows are
+  `hood_shopglass` (now `#2a2724`, roughness 0.25) instead of `glass_window`,
+  whose blinds read as white patchwork; the shop panes are the main
+  building's `glass_shop` (lit shops behind), with `hood_shopglass` left on the
+  piers, plinth, fascia and mullions. Roofs are warm grey `#74685c`,
+  roughness 0.6, metalness 0.05, a step darker than the walls from the air
+  (the 0.3 metalness had mirrored the sky). Awnings go on every street side
+  of every near bar; each side is on its own vertices, since `mesh.validate()`
+  drops a face that repeats another's vertices reversed and had left only
+  the underside. No new material or texture; `fpsmax index.html 1600 900 2`
+  after it: 35.0 / 31.0 / 31.3 ms at pr 2, 16.9 / 13.8 ms at pr 1.
+
+**The far side of the main street is buildings, not a square** (owner,
+2026-11-25: the renders show shopfronts facing ours, 005/006). The south row
+stands on the 6 m building line like the other three, and the far pavement
+keeps beds, benches and trees. That moved the cameras: the lab hero and the
+`?hero=` candidates stand on that pavement (y 75.5), and the sales page's
+rail (`build.py`, `rail`) is 85 m out at bearings 160 -> 143, from over the
+west street to the south-west junction (render 002's standpoint). The old
+arc (134 -> 112) now runs through buildings, and an arc pulled in over the
+street (62 m) put the building past the frame's edge. Re-shoot
+`web/hero-poster.webp` (`tools/poster.cjs`) whenever the rail moves.

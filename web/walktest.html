@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>walk.js - test bench</title>
+<!-- A bench for web/walk.js, not the product: plain GLTF loading, plain lit
+     materials, a HUD and a minimap. URL: ?portal=C1 | ?flat=37[&room=2] |
+     ?level=L05&at=x,y[&heading=deg] ; &street=0 skips the exterior ;
+     &rig=1 waits for tools/walkbuilding.cjs to drive it (window.__walk). -->
+<style>
+	html, body { margin: 0; height: 100%; background: #111; overflow: hidden; font: 13px/1.35 system-ui, sans-serif; }
+	canvas#view { display: block; width: 100%; height: 100%; touch-action: none; }
+	#hud { position: fixed; left: 10px; top: 10px; color: #fff; background: rgba(0,0,0,.55); padding: 8px 10px; border-radius: 6px; min-width: 220px; pointer-events: none; }
+	#hud b { color: #f2c14e; }
+	#lift { position: fixed; left: 10px; top: 120px; display: none; gap: 4px; flex-wrap: wrap; width: 230px; }
+	#lift button { font: inherit; padding: 4px 8px; }
+	#map { position: fixed; right: 10px; bottom: 10px; background: rgba(255,255,255,.9); border-radius: 6px; }
+	#help { position: fixed; left: 10px; bottom: 10px; color: #ccc; background: rgba(0,0,0,.45); padding: 6px 8px; border-radius: 6px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three-min/build/three.webgpu.js",
+    "three/webgpu": "./vendor/three-min/build/three.webgpu.js",
+    "three/tsl": "./vendor/three-min/build/three.tsl.js",
+    "three/addons/": "./vendor/three-min/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud">loading...</div>
+<div id="lift"></div>
+<canvas id="map" width="420" height="220"></canvas>
+<div id="help">WASD / arrows walk, Shift brisk, Q/E turn, drag to look; touch: left half walks, right half looks. Click a stop in a lift.</div>
+<script type="module">
+import * as THREE from 'three/webgpu';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { createWalker } from './walk.js';
+
+const Q = new URLSearchParams( location.search );
+const RIG = Q.get( 'rig' ) === '1';
+const D2R = Math.PI / 180;
+const fetchJSON = async ( u ) => ( await fetch( u, { cache: 'no-store' } ) ).json();
+const [ meta, planMeta ] = await Promise.all( [ fetchJSON( 'scene_meta.json' ), fetchJSON( 'plan_meta.json' ) ] );
+
+/* ---------------------------------------------------------------- three */
+const canvas = document.getElementById( 'view' );
+const renderer = new THREE.WebGPURenderer( { canvas, antialias: true } );
+renderer.setPixelRatio( Math.min( 2, devicePixelRatio ) );
+renderer.setSize( innerWidth, innerHeight, false );
+await renderer.init();
+const scene = new THREE.Scene();
+scene.background = new THREE.Color( 0xbcd3e6 );
+const camera = new THREE.PerspectiveCamera( 70, innerWidth / innerHeight, 0.1, 600 );
+scene.add( new THREE.HemisphereLight( 0xffffff, 0x8a7f70, 0.9 ) );
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const sun = new THREE.DirectionalLight( 0xffffff, 1.0 ); sun.position.set( 40, 80, 30 ); scene.add( sun );
+const lamp = new THREE.PointLight( 0xfff1dc, 2.2, 8, 1.2 );   // a headlamp: interiors have ceilings
+scene.add( lamp );
+
+// the plan frame in the world: world = origin + ex x + ey y + up z.
+// The interior GLBs are (x, z, y) of the plan, so their root is that basis.
+const F = meta.frame, v3 = a => new THREE.Vector3( a[ 0 ], a[ 1 ], a[ 2 ] );
+const interiorRoot = new THREE.Group();
+interiorRoot.matrixAutoUpdate = false;
+interiorRoot.matrix.makeBasis( v3( F.ex ), v3( F.up ), v3( F.ey ) ).setPosition( v3( F.origin ) );
+scene.add( interiorRoot );
+const toWorld = ( x, y, z ) => [ F.origin[ 0 ] + F.ex[ 0 ] * x + F.ey[ 0 ] * y + F.up[ 0 ] * z,
+	F.origin[ 1 ] + F.ex[ 1 ] * x + F.ey[ 1 ] * y + F.up[ 1 ] * z,
+	F.origin[ 2 ] + F.ex[ 2 ] * x + F.ey[ 2 ] * y + F.up[ 2 ] * z ];
+
+/* Plain materials by the name's family - a bench, not materials.js. */
+const MATS = new Map();
+function matFor( name ) {
+	name = ( name || '' ).replace( /\.\d+$/, '' );
+	if ( MATS.has( name ) ) return MATS.get( name );
+	const P = [ [ /glass/, 0x9fc4d8, { transparent: true, opacity: 0.35 } ], [ /parquet|walnut|wood|door_leaf/, 0xa47a52 ],
+		[ /tile_floor/, 0xd9d4cc ], [ /tile_grey|stone_dark|asphalt/, 0x55575a ], [ /marble/, 0xe8e4dc ],
+		[ /int_wall|plaster_light|white/, 0xf1eee8 ], [ /plaster_dark|reveal_dark|int_black/, 0x2a2a2c ],
+		[ /metal|frame|rail|mullion/, 0x3b3e42 ], [ /concrete|podium|pavement|sidewalk/, 0xb8b4ac ],
+		[ /foliage|grass|bark/, 0x5d7a4a ] ];
+	let m = null;
+	for ( const [ re, c, o ] of P ) if ( re.test( name ) ) { m = new THREE.MeshStandardMaterial( Object.assign( { color: c, roughness: 0.8 }, o || {} ) ); break; }
+	if ( ! m ) m = new THREE.MeshStandardMaterial( { color: 0xcfcac2, roughness: 0.85 } );
+	m.side = THREE.DoubleSide;
+	MATS.set( name, m );
+	return m;
+}
+const draco = new DRACOLoader().setDecoderPath( './vendor/three-min/examples/jsm/libs/draco/' );
+const gltf = new GLTFLoader().setDRACOLoader( draco );
+const loadGLB = ( url ) => new Promise( ( res, rej ) => gltf.load( url, g => {
+	g.scene.traverse( o => { if ( o.isMesh ) o.material = Array.isArray( o.material ) ? o.material.map( x => matFor( x.name ) ) : matFor( o.material.name ); } );
+	res( g.scene );
+}, undefined, rej ) );
+
+/* ---------------------------------------------------------------- what is loaded */
+const parts = new Map();   // 'L05' | 'cores' | 'street' -> { root, nodes:Map, rest:Map }
+const pending = new Map();
+function want( id ) {
+	if ( ! hasFile( id ) || parts.has( id ) || pending.has( id ) ) return;
+	const url = id === 'street' ? 'scene-street.glb' : `interior/${id}.glb`;
+	pending.set( id, loadGLB( url + '?v=' + Date.now() ).then( root => {
+		const nodes = new Map(), rest = new Map();
+		root.traverse( o => { if ( o.name ) { nodes.set( o.name, o ); rest.set( o.name, { p: o.position.clone(), q: o.quaternion.clone() } ); } } );
+		( id === 'street' ? scene : interiorRoot ).add( root );
+		parts.set( id, { root, nodes, rest } );
+		pending.delete( id );
+		dirty = true;
+	} ).catch( e => { console.error( 'load failed', id, e ); pending.delete( id ); } ) );
+}
+// ROOF has no file of its own: the stair heads are in cores.glb
+const hasFile = ( id ) => id === 'street' || id === 'cores' || /^L\d\d$/.test( id );
+const isLoaded = ( ids ) => ids.filter( hasFile ).every( id => parts.has( id ) );
+if ( Q.get( 'street' ) !== '0' ) want( 'street' );
+want( 'cores' );
+
+/* ---------------------------------------------------------------- the walker */
+let hudLift = null;
+const W = createWalker( { meta, planMeta, toWorld, worker: true, on: ( t, p ) => {
+	if ( t === 'lift' ) hudLift = p;
+	if ( t === 'liftExit' || t === 'arrive' ) hudLift = t === 'arrive' ? hudLift : null;
+} } );
+let S = null, dirty = true;
+const openDoors = new Map();   // node -> level, doors not at rest
+function apply( s ) {
+	for ( const id of s.needLevels ) want( id );
+	// interior levels: only the ones asked for are visible
+	for ( const [ id, P ] of parts ) if ( id !== 'street' && id !== 'cores' ) P.root.visible = s.needLevels.includes( id );
+	const seen = new Set();
+	for ( const d of s.doors ) {
+		const P = parts.get( d.level ); if ( ! P ) continue;
+		const n = P.nodes.get( d.node ); if ( ! n ) continue;
+		n.rotation.set( 0, d.rotY, 0 ); seen.add( d.node ); openDoors.set( d.node, d.level );
+	}
+	for ( const [ node, lv ] of openDoors ) if ( ! seen.has( node ) ) {     // back to shut
+		const P = parts.get( lv ), r = P && P.rest.get( node );
+		if ( r ) P.nodes.get( node ).quaternion.copy( r.q );
+		openDoors.delete( node );
+	}
+	const C = parts.get( 'cores' );
+	if ( C ) for ( const l of s.lifts ) {
+		const car = C.nodes.get( l.car );
+		if ( car ) car.position.y = C.rest.get( l.car ).p.y + l.z;
+		// landing doors slide aside along their own line
+		for ( const st of planMeta.lifts.find( x => `${x.core}-${x.shaft}` === l.id ).stops ) {
+			const name = `in_${l.id.split( '-' )[ 0 ]}_lift${l.id.split( '-' )[ 1 ]}_${st.level}_door__metal_dark`;
+			const n = C.nodes.get( name ); if ( ! n ) continue;
+			const r = C.rest.get( name ), k = l.level === st.level ? l.doorOpen : 0;
+			const dx = st.door[ 1 ][ 0 ] - st.door[ 0 ][ 0 ], dy = st.door[ 1 ][ 1 ] - st.door[ 0 ][ 1 ];
+			n.position.set( r.p.x + dx * 0.95 * k, r.p.y, r.p.z + dy * 0.95 * k );
+		}
+	}
+	const [ ex, ey, ez ] = s.eye, [ tx, ty, tz ] = s.target;
+	camera.near = s.near; camera.updateProjectionMatrix();
+	camera.position.set( ex, ey, ez ); camera.up.set( 0, 1, 0 ); camera.lookAt( tx, ty, tz ); camera.rotateZ( s.roll );
+	lamp.position.set( ex, ey + 0.3, ez );
+}
+
+/* ---------------------------------------------------------------- HUD + minimap */
+const hud = document.getElementById( 'hud' ), liftBox = document.getElementById( 'lift' );
+const mapC = document.getElementById( 'map' ), mctx = mapC.getContext( '2d' );
+const mapCache = new Map();
+function levelMap( id ) {
+	if ( mapCache.has( id ) ) return mapCache.get( id );
+	const N = W.nav( id ), bb = N.bb, sc = Math.min( 418 / ( bb[ 2 ] - bb[ 0 ] ), 218 / ( bb[ 3 ] - bb[ 1 ] ) );
+	const c = document.createElement( 'canvas' ); c.width = 420; c.height = 220;
+	const g = c.getContext( '2d' );
+	const P = ( x, y ) => [ 1 + ( x - bb[ 0 ] ) * sc, 219 - ( y - bb[ 1 ] ) * sc ];
+	const col = { flat: '#e6efe0', loggia: '#c8def5', corridor: '#f6e3a8', hall: '#f6d79a', door: '#f0a0a0',
+		half_landing: '#d6a7f0', stair: '#b9b0ff', terrace: '#c7f2da', commercial: '#e2e2e2', street: '#ddd', head: '#f6e3a8', lift: '#888', sill: '#888' };
+	for ( const s of N.surf ) {
+		g.fillStyle = col[ s.kind ] || '#ccc'; g.beginPath();
+		for ( const r of s.P.rings ) { for ( let i = 0; i < r.length; i += 2 ) { const [ px, py ] = P( r[ i ], r[ i + 1 ] ); i ? g.lineTo( px, py ) : g.moveTo( px, py ); } g.closePath(); }
+		g.fill( 'evenodd' );
+	}
+	const m = { c, P, sc };
+	mapCache.set( id, m );
+	return m;
+}
+function drawHud( s ) {
+	const fl = s.flat ? `flat <b>${s.flat}</b>` : s.office ? `office <b>${s.office}</b>` : '';
+	hud.innerHTML = `level <b>${s.level}</b> ${s.onStair ? '(stair)' : ''} ${fl}<br>` +
+		`${s.room ? s.room.name : s.surface || ''}${s.inLift ? ' - lift ' + s.inLift.id + ( s.inLift.riding ? ' (moving)' : '' ) : ''}<br>` +
+		`<span style="opacity:.7">z ${s.pos.plan[ 2 ].toFixed( 2 )} m  need ${s.needLevels.join( ',' )}  doors ${s.doors.length}</span>`;
+	if ( s.inLift && ! s.inLift.riding ) {
+		if ( liftBox.dataset.k !== s.inLift.id + s.inLift.at ) {
+			liftBox.dataset.k = s.inLift.id + s.inLift.at;
+			liftBox.innerHTML = '';
+			for ( const lv of s.inLift.stops ) {
+				const b = document.createElement( 'button' ); b.textContent = lv; b.disabled = lv === s.inLift.at;
+				b.onclick = () => { W.liftGo( lv ); dirty = true; };
+				liftBox.appendChild( b );
+			}
+		}
+		liftBox.style.display = 'flex';
+	} else { liftBox.style.display = 'none'; liftBox.dataset.k = ''; }
+	const M = levelMap( s.level );
+	mctx.clearRect( 0, 0, 420, 220 ); mctx.drawImage( M.c, 0, 0 );
+	const [ px, py ] = M.P( s.pos.plan[ 0 ], s.pos.plan[ 1 ] );
+	mctx.fillStyle = '#d33'; mctx.beginPath(); mctx.arc( px, py, 4, 0, 7 ); mctx.fill();
+	mctx.strokeStyle = '#d33'; mctx.lineWidth = 2; mctx.beginPath(); mctx.moveTo( px, py );
+	mctx.lineTo( px + Math.cos( s.heading ) * 14, py - Math.sin( s.heading ) * 14 ); mctx.stroke();
+}
+
+/* ---------------------------------------------------------------- input */
+const keys = new Set();
+addEventListener( 'keydown', e => { keys.add( e.code ); dirty = true; } );
+addEventListener( 'keyup', e => keys.delete( e.code ) );
+let look = { yaw: 0, pitch: 0 }, drag = null, touchMove = null;
+canvas.addEventListener( 'pointerdown', e => {
+	canvas.setPointerCapture( e.pointerId );
+	if ( e.pointerType === 'touch' && e.clientX < innerWidth / 2 ) touchMove = { id: e.pointerId, x: e.clientX, y: e.clientY, f: 0, r: 0 };
+	else drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+} );
+canvas.addEventListener( 'pointermove', e => {
+	if ( drag && e.pointerId === drag.id ) {
+		look.yaw += ( e.clientX - drag.x ) * 0.004; look.pitch -= ( e.clientY - drag.y ) * 0.004;
+		drag.x = e.clientX; drag.y = e.clientY; dirty = true;
+	}
+	if ( touchMove && e.pointerId === touchMove.id ) {
+		touchMove.f = Math.max( - 1, Math.min( 1, - ( e.clientY - touchMove.y ) / 60 ) );
+		touchMove.r = Math.max( - 1, Math.min( 1, ( e.clientX - touchMove.x ) / 60 ) ); dirty = true;
+	}
+} );
+const up = e => { if ( drag && e.pointerId === drag.id ) drag = null; if ( touchMove && e.pointerId === touchMove.id ) touchMove = null; };
+canvas.addEventListener( 'pointerup', up ); canvas.addEventListener( 'pointercancel', up );
+function input() {
+	const k = c => keys.has( c ) ? 1 : 0;
+	const I = { forward: k( 'KeyW' ) + k( 'ArrowUp' ) - k( 'KeyS' ) - k( 'ArrowDown' ),
+		strafe: k( 'KeyD' ) - k( 'KeyA' ), turn: k( 'KeyE' ) + k( 'ArrowRight' ) - k( 'KeyQ' ) - k( 'ArrowLeft' ),
+		run: keys.has( 'ShiftLeft' ) || keys.has( 'ShiftRight' ), look };
+	if ( touchMove ) { I.forward = touchMove.f; I.strafe = touchMove.r; }
+	look = { yaw: 0, pitch: 0 };
+	return I;
+}
+
+/* ---------------------------------------------------------------- start */
+function start() {
+	if ( Q.get( 'portal' ) ) return W.enter( { portal: Q.get( 'portal' ) } );
+	if ( Q.get( 'flat' ) ) return W.enter( Q.get( 'room' ) != null ? { flat: Q.get( 'flat' ), room: + Q.get( 'room' ) } : { flat: Q.get( 'flat' ) } );
+	if ( Q.get( 'level' ) ) return W.enter( { level: Q.get( 'level' ), at: ( Q.get( 'at' ) || '' ).split( ',' ).map( Number ).filter( n => ! isNaN( n ) ).slice( 0, 2 ),
+		heading: Q.get( 'heading' ) ? + Q.get( 'heading' ) * D2R : 0 } );
+	return W.enter( { portal: 'C1' } );
+}
+S = start() || W.enter( { portal: 'C1' } );
+apply( S );
+
+let last = performance.now();
+function frame( now ) {
+	const dt = Math.min( 0.05, ( now - last ) / 1000 ); last = now;
+	if ( ! RIG ) {
+		const I = input();
+		const s = W.step( dt, I );
+		if ( s.moving ) dirty = true;
+		S = s;
+	}
+	if ( dirty ) { apply( S ); drawHud( S ); renderer.render( scene, camera ); dirty = false; }
+	requestAnimationFrame( frame );
+}
+requestAnimationFrame( frame );
+addEventListener( 'resize', () => { renderer.setSize( innerWidth, innerHeight, false ); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); dirty = true; } );
+
+/* ---------------------------------------------------------------- rig hooks
+ * tools/walkbuilding.cjs shots: deterministic scripted walks with the real
+ * step() at a fixed 1/60 s, then one render. */
+const DT = 1 / 60;
+const wrap = a => Math.atan2( Math.sin( a ), Math.cos( a ) );
+function run( n, I ) { for ( let k = 0; k < n; k ++ ) S = W.step( DT, I || {} ); return S; }
+function settle( max = 600 ) { for ( let k = 0; k < max; k ++ ) { S = W.step( DT, {} ); if ( ! S.moving ) break; } return S; }
+function steer( pts, maxS = 60 ) {
+	const B = W.debug.B;
+	let i = 0;
+	for ( let n = 0; n < maxS / DT && i < pts.length; n ++ ) {
+		const p = pts[ i ];
+		if ( Math.hypot( p[ 0 ] - B.x, p[ 1 ] - B.y ) < 0.2 ) { i ++; continue; }
+		const yaw = wrap( Math.atan2( p[ 1 ] - B.y, p[ 0 ] - B.x ) - B.h );
+		S = W.step( DT, { forward: Math.abs( yaw ) > 1.2 ? 0 : 1, look: { yaw, pitch: 0 } } );
+	}
+	return i >= pts.length;
+}
+function faceTo( h, pitch = 0 ) { const B = W.debug.B; S = W.step( DT, { look: { yaw: wrap( h - B.h ), pitch: pitch - B.p } } ); return S; }
+const flights = ( level, core ) => W.nav( level ).surf.filter( s => s.kind === 'stair' && s.core === core ).sort( ( a, b ) => a.flight - b.flight );
+const ends = s => { const r = s.ramp, b = s.P.bb, cx = ( b[ 0 ] + b[ 2 ] ) / 2, cy = ( b[ 1 ] + b[ 3 ] ) / 2, h = ( r.hi - r.lo ) / 2;
+	return { bot: [ cx - r.ax * h, cy - r.ay * h ], top: [ cx + r.ax * h, cy + r.ay * h ], ax: [ r.ax, r.ay ], c: [ cx, cy ] }; };
+const doorOut = ( lift, st ) => {
+	const [ a, b ] = st.door, mx = ( a[ 0 ] + b[ 0 ] ) / 2, my = ( a[ 1 ] + b[ 1 ] ) / 2, l = Math.hypot( b[ 0 ] - a[ 0 ], b[ 1 ] - a[ 1 ] );
+	let nx = - ( b[ 1 ] - a[ 1 ] ) / l, ny = ( b[ 0 ] - a[ 0 ] ) / l;
+	if ( W.debug.inPoly( lift.cab, mx + nx * 0.4, my + ny * 0.4 ) ) { nx = - nx; ny = - ny; }
+	return { mid: [ mx, my ], n: [ nx, ny ] };
+};
+const summary = ( extra ) => Object.assign( { level: S.level, flat: S.flat, room: S.room && S.room.name, surface: S.surface,
+	z: + S.pos.plan[ 2 ].toFixed( 3 ), eyeOverFloor: + ( S.eye[ 1 ] - toWorld( 0, 0, S.pos.plan[ 2 ] )[ 1 ] ).toFixed( 3 ),
+	near: S.near, need: S.needLevels, doorsOpen: S.doors.map( d => d.node.replace( /^in_/, '' ) + '@' + d.angle.toFixed( 0 ) ) }, extra || {} );
+window.__walk = {
+	W, ready: true,
+	loaded: () => { apply( S ); return isLoaded( S.needLevels ) && parts.has( 'cores' ) && ( Q.get( 'street' ) === '0' || parts.has( 'street' ) ) && ! pending.size; },
+	frame: () => { apply( S ); drawHud( S ); renderer.render( scene, camera );
+		const B = W.debug.B; return summary( { clearance: + W.debug.free( S.level, B.x, B.y ).toFixed( 3 ), moving: S.moving } ); },
+	go( o, acts ) { S = W.enter( o ); for ( const [ a, t ] of acts || [] ) if ( a === 'walk' ) run( Math.round( t / DT ), { forward: 1 } ); settle(); return summary(); },
+	stair( core, level, frac ) {
+		const [ f1, f2 ] = flights( level, core ), e1 = ends( f1 ), e2 = ends( f2 );
+		const foot = [ e1.bot[ 0 ] - e1.ax[ 0 ] * 0.6, e1.bot[ 1 ] - e1.ax[ 1 ] * 0.6 ];
+		S = W.enter( { level, at: foot, heading: Math.atan2( e1.ax[ 1 ], e1.ax[ 0 ] ) } );
+		if ( frac === 'hl' ) {
+			const hl = W.nav( level ).surf.find( s => s.kind === 'half_landing' && s.core === core ), hb = hl.P.bb;
+			steer( [ [ e1.top[ 0 ] - e1.ax[ 0 ] * 0.2, e1.top[ 1 ] - e1.ax[ 1 ] * 0.2 ], [ ( hb[ 0 ] + hb[ 2 ] ) / 2, ( hb[ 1 ] + hb[ 3 ] ) / 2 ] ] );
+			settle(); faceTo( Math.atan2( e2.ax[ 1 ], e2.ax[ 0 ] ), 0.25 );
+		} else if ( frac >= 1 ) {
+			const hl = W.nav( level ).surf.find( s => s.kind === 'half_landing' && s.core === core ), hb = hl.P.bb;
+			steer( [ e1.top, [ ( hb[ 0 ] + hb[ 2 ] ) / 2, ( hb[ 1 ] + hb[ 3 ] ) / 2 ], e2.bot, [ e2.top[ 0 ] + e2.ax[ 0 ] * 0.8, e2.top[ 1 ] + e2.ax[ 1 ] * 0.8 ] ] );
+			settle();
+		} else {
+			const p = [ e1.bot[ 0 ] + ( e1.top[ 0 ] - e1.bot[ 0 ] ) * frac, e1.bot[ 1 ] + ( e1.top[ 1 ] - e1.bot[ 1 ] ) * frac ];
+			steer( [ e1.bot, p ] ); settle(); faceTo( Math.atan2( e1.ax[ 1 ], e1.ax[ 0 ] ), 0.15 );
+		}
+		return summary();
+	},
+	lobby( id, level ) {
+		const lift = W.debug.LIFTS.find( l => l.id === id ), st = lift.stops.find( s => s.level === level ), o = doorOut( lift, st );
+		S = W.enter( { level, at: [ o.mid[ 0 ] + o.n[ 0 ] * 1.3, o.mid[ 1 ] + o.n[ 1 ] * 1.3 ], heading: Math.atan2( - o.n[ 1 ], - o.n[ 0 ] ) } );
+		for ( let k = 0; k < 60 * 40 && ! ( lift.at === lift.stops.indexOf( st ) && lift.doorT >= 1 ); k ++ ) S = W.step( DT, {} );
+		return summary( { car: lift.stops[ lift.at ].level, doorT: lift.doorT } );
+	},
+	corridor( level ) {
+		// the corridor surface's longest straight run from its west end
+		const c = W.nav( level ).surf.find( s => s.kind === 'corridor' );
+		S = W.enter( { level, at: [ 24, 8.25 ], heading: 0 } );
+		settle(); return summary( { corridorBB: c.P.bb } );
+	},
+	flatDoor( n ) {
+		const F = W.flats().find( f => f.n === n ), N = W.nav( F.level ), u = N.units.find( x => x.n === n );
+		const d = u.doors.find( x => x.kind === 'entrance' ), sh = d.shut * D2R;
+		const cx = d.hinge[ 0 ] + Math.cos( sh ) * d.w / 2, cy = d.hinge[ 1 ] + Math.sin( sh ) * d.w / 2;
+		let nx = - Math.sin( sh ), ny = Math.cos( sh );
+		if ( ! W.debug.inPoly( u.P, cx + nx * 0.6, cy + ny * 0.6 ) ) { nx = - nx; ny = - ny; }
+		S = W.enter( { level: F.level, at: [ cx - nx * 1.6, cy - ny * 1.6 ], heading: Math.atan2( ny, nx ) } );
+		run( 40, { forward: 1 } ); run( 20, {} );
+		return summary();
+	},
+	room( n, i ) { S = W.toRoom( n, i ); settle(); return summary( { i } ); },
+	loggiaOut( n ) {
+		const F = W.flats().find( f => f.n === n ), u = W.nav( F.level ).units.find( x => x.n === n );
+		const k = u.rooms.findIndex( r => r.kind === 'loggia' ), r = u.rooms[ k ];
+		S = W.toRoom( n, k ); settle();
+		const ub = u.P.bb, rb = r.P.bb;
+		faceTo( Math.atan2( ( rb[ 1 ] + rb[ 3 ] ) / 2 - ( ub[ 1 ] + ub[ 3 ] ) / 2, ( rb[ 0 ] + rb[ 2 ] ) / 2 - ( ub[ 0 ] + ub[ 2 ] ) / 2 ), - 0.05 );
+		return summary( { loggia: k } );
+	},
+	ride( id, level, frac ) {
+		const lift = W.debug.LIFTS.find( l => l.id === id ), st = lift.stops[ 0 ], o = doorOut( lift, st );
+		S = W.enter( { level: st.level, at: [ o.mid[ 0 ] + o.n[ 0 ] * 1.2, o.mid[ 1 ] + o.n[ 1 ] * 1.2 ], heading: Math.atan2( - o.n[ 1 ], - o.n[ 0 ] ) } );
+		for ( let k = 0; k < 60 * 120 && ! ( lift.at === 0 && lift.v === 0 && lift.target === 0 && lift.doorT >= 1 ); k ++ ) S = W.step( DT, {} );
+		const cb = lift.cab.bb;
+		steer( [ o.mid, [ ( cb[ 0 ] + cb[ 2 ] ) / 2, ( cb[ 1 ] + cb[ 3 ] ) / 2 ] ] ); settle();
+		faceTo( Math.atan2( o.n[ 1 ], o.n[ 0 ] ) );
+		const ok = W.liftGo( level ), z1 = lift.stops.find( s => s.level === level ).z;
+		for ( let k = 0; k < 60 * 60; k ++ ) {
+			S = W.step( DT, {} );
+			if ( frac < 1 && lift.z >= z1 * frac ) break;
+			if ( frac >= 1 && lift.at === lift.stops.findIndex( s => s.level === level ) && lift.doorT >= 1 ) break;
+		}
+		return summary( { liftGo: ok, carZ: + lift.z.toFixed( 2 ), riding: lift.riding } );
+	},
+	podiumTop() {
+		this.stair( 'podium', 'L00', 1 );
+		const d = W.nav( 'L01' ).doors.find( x => x.w > 1.3 && Math.abs( x.hy - 29 ) < 0.5 );
+		steer( [ [ d.cx, d.cy + 0.5 ], [ d.cx, d.cy - 1.5 ], [ d.cx, d.cy - 4 ] ] ); settle(); faceTo( - Math.PI / 2, 0 );
+		return summary();
+	},
+};
+</script>
+</body>
+</html>

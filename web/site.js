@@ -13,7 +13,7 @@
  *  page degrades to a plain site if WebGPU is missing.
  * ===================================================================== */
 
-import { SITE, STATS, FLATS, TYPES } from './content.js';
+import { SITE, STATS, FLATS, TYPES, SHOW, ISSUES, flatByN, SHOW_BLOCKS } from './content.js';
 import { applyLang, applyHead, applyTitleFont, startLang, keepLang, lang, t, tf }
 	from './i18n.js';
 
@@ -30,8 +30,86 @@ const isPh = ( x ) => !! ( x && typeof x === 'object' && x.ph );
 const val = ( x ) => isPh( x ) ? x.v : x;
 const money = ( n ) => SITE.currency + Math.round( n ).toLocaleString( 'en-US' );
 const num = ( n ) => Number( n ).toLocaleString( 'en-US' );
+/* an area as the plans print it: always one decimal (55.0, not 55) */
+const m2 = ( v ) => Number( v ).toFixed( 1 );
 
-const TOUR = FLATS.find( f => f.tour );
+/* ======================================================= the scene seams
+ * Every question this page asks the 3D scene, one function each. The scene
+ * is being rebuilt from the architect's plans; these are the only places
+ * that know what it can answer, so a scene that offers none of the new
+ * calls - or no scene at all - leaves a page that still works. See the
+ * seam paragraph in blender/plans/CONTRACT.md.
+ *
+ *   SCENE.floorOf( detail )   which residential floor (1..9) an event is about
+ *   SCENE.flatOf( detail )    which flat an event is about (by `n` / `poly`)
+ *   SCENE.showFlat()          which flat the 3D tour is standing in
+ *   SCENE.canOpenFlat()       can the scene open ANY flat by its number?
+ *   SCENE.openFlat( f )       open flat f in 3D (true if it did)
+ *   SCENE.openFloor( floor )  the floor view of floor 1..9
+ *   SCENE.walkIn( k )         walk in at entrance k (1..3, 'podium')
+ *   SCENE.walkFlat( f )       walk into flat f from its front door */
+const LP = () => window.LP || null;
+const FLOORS = SITE.floors;
+const SCENE = {
+	floorOf( d ) {
+		if ( ! d ) return 0;
+		const lv = /^L(\d\d)$/.exec( d.level || '' );
+		if ( lv ) return clampFloor( + lv[ 1 ] - 1 );            // L02 is floor 1
+		/* The old scene numbers its STOREYS, the podium terrace being 1, so
+		 * its storey n is the inventory's floor n - 1. Kept only while that
+		 * scene is the one on the page. */
+		if ( d.floor ) return clampFloor( ( d.floor | 0 ) - 1 );
+		return 0;
+	},
+	flatOf( d ) {
+		if ( ! d ) return null;
+		if ( d.n != null ) return flatByN( d.n );
+		const m = /^L\d\d-u(.+)$/.exec( d.poly || '' );
+		if ( m ) return flatByN( m[ 1 ] );
+		/* The old scene says only "unit 0..7 of the modelled row", which is
+		 * no flat in the real building: nothing is named rather than the
+		 * wrong flat. */
+		return null;
+	},
+	showFlat() {
+		const lp = LP();
+		const n = lp && lp.showFlat;
+		return ( n != null && flatByN( n ) ) || flatByN( val( SHOW ) ) || FLATS[ FLATS.length - 1 ];
+	},
+	canOpenFlat() { const lp = LP(); return !! ( lp && typeof lp.openFlat === 'function' ); },
+	openFlat( f ) {
+		const lp = LP();
+		if ( ! f || ! lp || typeof lp.openFlat !== 'function' ) return false;
+		try { return !! lp.openFlat( f.n ); } catch ( e ) { console.warn( 'openFlat', e ); return false; }
+	},
+	/* On foot: from a street door (`k` 1..3, or 'podium' for the terrace
+	 * stair), or into flat f from its own front door. */
+	canWalk() { const lp = LP(); return !! ( lp && typeof lp.walk === 'function' ); },
+	walkIn( k ) {
+		const lp = LP();
+		if ( ! lp || typeof lp.entrance !== 'function' ) return false;
+		try { lp.entrance( k ); return true; } catch ( e ) { console.warn( 'entrance', e ); return false; }
+	},
+	walkFlat( f ) {
+		const lp = LP();
+		if ( ! f || ! lp || typeof lp.walk !== 'function' ) return false;
+		try { lp.walk( { flat: f.n } ); return true; } catch ( e ) { console.warn( 'walk', e ); return false; }
+	},
+	openFloor( fl ) {
+		const lp = LP();
+		if ( ! lp ) return false;
+		const level = 'L' + String( fl + 1 ).padStart( 2, '0' );
+		if ( typeof lp.openLevel === 'function' ) return !! lp.openLevel( level );
+		// the old scene: its storey is the floor + 1, and it has fewer of them
+		if ( typeof lp.setScene === 'function' ) {
+			lp.setScene( 2, Math.min( fl + 1, lp.topFloor || fl + 1 ), 'plan' );
+			return true;
+		}
+		return false;
+	},
+};
+function clampFloor( n ) { return n >= 1 && n <= FLOORS ? n : 0; }
+window.LPpage = { SCENE, flatByN };        // for the rigs and the console
 
 /* ------------------------------------------------------------- the facts
  * Every `data-v="key"` in the markup is filled from here, so a phone
@@ -43,13 +121,21 @@ const FACTS = {
 	place: `${ val( SITE.district ) }, ${ SITE.city }`,
 	floors: SITE.floors,
 	flats: STATS.flats,
-	available: STATS.available,
+	// availability is not in the plans: a placeholder until the sales office's list
+	available: { ph: true, v: STATS.available },
+	parkingUnder: num( SITE.parkingUnder ),
+	parkingOut: num( SITE.parkingOut ),
+	commercialArea: num( Math.round( SITE.commercialArea ) ),
+	officeArea: num( Math.round( SITE.officeArea ) ),
+	get parkingLine() { return tf( 'Yes - {u} underground spaces on level -1, and {o} outdoor spaces around the building.',
+		{ u: SITE.parkingUnder, o: SITE.parkingOut } ); },
 	get banksLine() { return val( SITE.banks ).map( t ).join( ', ' ); },
 	families: num( val( SITE.families ) ),
-	tourTitle: tf( '{label}, {area} m²', { label: t( TOUR.label ), area: TOUR.area } ),
-	tourFloor: TOUR.floor,
-	tourArea: TOUR.area + ' m²',
-	tourPrice: money( TOUR.price ),
+	get tourBadge() { const f = SCENE.showFlat(); return t( 'The show flat · ' ) + ( SHOW_BLOCKS ? tf( 'flat {n}, floor {f}, block {b}', { n: f.n, f: f.floor, b: f.block } ) : tf( 'flat {n}, floor {f}', { n: f.n, f: f.floor } ) ); },
+	get tourTitle() { const f = SCENE.showFlat(); return tf( '{label}, {area} m²', { label: t( f.label ), area: f.areaTotal } ); },
+	get tourFloor() { return SCENE.showFlat().floor; },
+	get tourArea() { return SCENE.showFlat().areaTotal + ' m²'; },
+	get tourPrice() { return { ph: true, v: money( SCENE.showFlat().price ) }; },
 };
 
 function fill() {
@@ -126,6 +212,8 @@ function heroScene() {
 		 * in the floor view exactly where they were, with the card under
 		 * the hero quietly renamed. The floor view has to be asked to
 		 * leave, and on the storey it is already standing on. */
+		/* The real building: the tour opens THE flat, by its number. */
+		if ( flat && SCENE.openFlat( flat ) ) { showTourFlat( flat ); return; }
 		const plan = document.body.classList.contains( 'floorview' );
 		if ( window.LP.scene !== 2 || plan )
 			window.LP.setScene( 2, plan ? window.LP.floor : undefined );
@@ -143,9 +231,10 @@ function heroScene() {
 		const two = e.detail.scene === 2;
 		const plan = two && e.detail.view === 'plan';
 		document.body.classList.toggle( 'scene2', two );
+		document.body.classList.toggle( 'walkview', two && e.detail.view === 'walk' );
 		document.body.classList.toggle( 'floorview', plan );
-		if ( two ) showTourFlat( openOn( e.detail.floor ) );
-		if ( plan ) fillTypeRail( e.detail.floor );
+		if ( two ) showTourFlat( SCENE.flatOf( e.detail ) || SCENE.showFlat() );
+		if ( plan ) fillTypeRail( SCENE.floorOf( e.detail ) );
 		/* Told BEFORE the flight begins - `lp:scene` is announced at the top
 		 * of setScene, the crane is aimed at the bottom of it - so the shot
 		 * flies straight to the framing it will keep. */
@@ -189,15 +278,17 @@ function heroScene() {
 	 * them here would walk the camera and page the storey on one press. */
 
 	// no WebGPU, no scene: the veil says so and the page carries on
-	addEventListener( 'lp:ready', () => $( '#hero' ).classList.add( 'live' ) );
+	addEventListener( 'lp:ready', () => {
+		$( '#hero' ).classList.add( 'live' );
+		// the open flat's card can offer the 3D now that there is a scene to ask
+		if ( openN ) openFlatCard( flatByN( openN ) );
+	} );
 
 	/* The scene lights the storey under the pointer and says which one it
-	 * is; the page answers with what is for sale on it. Only the street
-	 * line counts - those are the flats whose windows are in the frame -
-	 * and the model carries ten storeys, so the hover never reaches the top
-	 * two of the twelve the inventory has. */
+	 * is; the page answers with what is for sale on it - the whole floor,
+	 * both blocks, since the scene no longer has one street line to light. */
 	const tag = $( '#floortag' );
-	const front = ( fl ) => FLATS.filter( f => f.floor === fl && /^Street/.test( f.aspect ) );
+	const onFloor = ( fl ) => FLATS.filter( f => f.floor === fl );
 
 	/* The card rides the pointer. `lp:floor` only fires when the storey
 	 * CHANGES - the scene has nothing to say while the pointer wanders
@@ -233,14 +324,33 @@ function heroScene() {
 	}, { passive: true } );
 	$( '#frame' ).addEventListener( 'pointerleave', hide );
 
+	/* A street door under the pointer: the card says which entrance, and
+	 * that a click walks in. */
+	let doorHot = null;
+	addEventListener( 'lp:door', ( e ) => {
+		doorHot = e.detail && e.detail.portal;
+		if ( ! doorHot ) return hide();
+		tag.innerHTML = `<b>${ e.detail.terrace ? t( 'Terrace stairs' ) : tf( 'Entrance {k}', { k: e.detail.k } ) }</b><span>${ t( 'Click to walk in' ) }</span>`;
+		tag.hidden = false; on = true;
+		tw = tag.offsetWidth; th = tag.offsetHeight;
+		place();
+	} );
 	addEventListener( 'lp:floor', ( e ) => {
-		const n = e.detail.floor;
+		if ( doorHot ) return;
+		const n = SCENE.floorOf( e.detail );
+		/* The office storey (L01) is a level of the real building too. */
+		if ( ! n && e.detail && e.detail.level === 'L01' ) {
+			tag.innerHTML = `<b>${ t( 'Offices' ) }</b><span>${ e.detail.offices || '' } · ${ num( Math.round( SITE.officeArea ) ) } m²</span>`;
+			tag.hidden = false; on = true;
+			tw = tag.offsetWidth; th = tag.offsetHeight;
+			return place();
+		}
 		if ( ! n ) return hide();
-		const sel = front( n ), free = sel.filter( f => f.status === 'available' );
-		tag.innerHTML = `<b>${ tf( 'Floor {n}', { n } ) }</b>` + ( free.length
+		const sel = onFloor( n ), free = sel.filter( f => f.status === 'available' );
+		tag.innerHTML = `<b>${ tf( 'Floor {n} of {all}', { n, all: FLOORS } ) }</b>` + ( free.length
 			? `<span>${ tf( '{free} of {all} free', { free: free.length, all: sel.length } ) } · ${ t( 'from' ) } `
 				+ `${ money( Math.min( ...free.map( f => f.price ) ) ) }</span>`
-			: `<span>${ tf( '{n} on the street line · all taken', { n: sel.length } ) }</span>` );
+			: `<span>${ tf( '{n} flats · all taken', { n: sel.length } ) }</span>` );
 		/* Shown, then measured, then placed - all in this one task, so the
 		 * browser paints it once, already under the pointer. Measuring it
 		 * while it is still `hidden` reads 0 off a `display:none` box and
@@ -258,21 +368,40 @@ function heroScene() {
 	 * one of the two has changed - a drag moves the plan sixty times a
 	 * second and this is eight DOM writes every time it does.
 	 *
-	 * Every flat in the row is the modelled one, so they all carry the
-	 * same area; the badge is the show flat's, not the inventory's. */
+	 * A badge names its flat's own total area when the scene says which flat
+	 * it stands on (`n` / `poly`); the old scene does not, and every unit in
+	 * its row is the modelled one, so there the badge is the show flat's. */
 	const badgeBox = $( '#planbadges' );
 	const badges = [];
+	/* ...and the real building's: a whole level is up to 23 flats on one
+	 * plate, so each badge carries the flat's own NUMBER beside its area and
+	 * is drawn compact (`data-lv`). An office carries its number and the
+	 * area the scene read off the plan; a flat the inventory does not know
+	 * shows the scene's area rather than the show flat's. */
+	const entBox = $( '#planents' );
+	const ents = [];
 	addEventListener( 'lp:planbadge', ( e ) => {
 		const list = e.detail.badges || [];
+		const lv = !! e.detail.level;
 		while ( badges.length < list.length ) {
 			const b = el( 'div', 'pbadge' );
-			b.innerHTML = `<span class="pb"><b>${ TOUR.area }</b><i>m<sup>2</sup></i></span>`;
+			b.innerHTML = `<span class="pb"><em></em><b></b><i>m<sup>2</sup></i></span>`;
 			badgeBox.append( b );
 			badges.push( b );
 		}
 		for ( let i = 0; i < badges.length; i ++ ) {
 			const p = list[ i ];
 			const b = badges[ i ];
+			if ( p ) {
+				const f = SCENE.flatOf( p );
+				const v = f ? m2( f.areaTotal ) : p.area != null ? m2( p.area ) : String( SCENE.showFlat().areaTotal );
+				const bb = b.querySelector( 'b' );
+				if ( bb.textContent !== v ) bb.textContent = v;
+				const no = p.n != null ? String( p.n ) : p.office != null ? t( 'Office' ) + ' ' + p.office : '';
+				const em = b.querySelector( 'em' );
+				if ( em.textContent !== no ) em.textContent = no;
+				b.toggleAttribute( 'data-lv', lv );
+			}
 			/* Off the floor view altogether: taken out of the layout, not
 			 * faded - there is no plan left under them to step off. */
 			if ( ! p ) { b.hidden = true; continue; }
@@ -282,6 +411,30 @@ function heroScene() {
 			 * frame of a drag and must not be eased. */
 			b.style.transform = `translate3d(${ p.x }px, ${ p.y }px, 0) translate(-50%, -50%)`;
 			b.toggleAttribute( 'data-off', ! p.on );
+		}
+		/* The three entrances, named at their cores: C1 is entrance 1. */
+		const el2 = e.detail.entrances || [];
+		if ( entBox ) {
+			while ( ents.length < el2.length ) {
+				const b = el( 'button', 'pent' );
+				b.type = 'button';
+				/* ...and each one is a way in: the visitor is walked up to
+				 * that entrance's street door. */
+				b.addEventListener( 'click', () => { if ( b.dataset.k ) SCENE.walkIn( b.dataset.k ); } );
+				entBox.append( b );
+				ents.push( b );
+			}
+			ents.forEach( ( b, i ) => {
+				const p = el2[ i ];
+				if ( ! p ) { b.hidden = true; return; }
+				b.hidden = false;
+				const txt = t( 'Entrance' ) + ' ' + p.k;
+				if ( b.textContent !== txt ) b.textContent = txt;
+				b.dataset.k = p.k;
+				b.title = t( 'Walk in' );
+				b.style.transform = `translate3d(${ p.x }px, ${ p.y }px, 0) translate(-50%, -50%)`;
+				b.toggleAttribute( 'data-off', ! p.on );
+			} );
 		}
 	} );
 
@@ -319,9 +472,10 @@ function heroScene() {
 			if ( ! p ) { b.hidden = true; continue; }
 			b.hidden = false;
 			const lab = b.lastChild;
-			if ( lab.textContent !== t( p.name ) ) {
-				lab.textContent = t( p.name );
-				b.setAttribute( 'aria-label', t( 'Look inside the ' ) + t( p.name ).toLowerCase() );
+			const nm = ( lang() === 'ka' && p.ka ) ? p.ka : t( p.name );
+			if ( lab.textContent !== nm ) {
+				lab.textContent = nm;
+				b.setAttribute( 'aria-label', t( 'Look inside the ' ) + nm.toLowerCase() );
 			}
 			/* Written straight on, never eased: this is rewritten on every
 			 * frame of a drag and a transition here would lag the plan by
@@ -364,7 +518,7 @@ function heroScene() {
 		const on = room >= 0;
 		document.body.classList.toggle( 'roomview', on );
 		roomBar.hidden = ! on;
-		if ( on ) $( '#room-name' ).textContent = t( name || '' );
+		if ( on ) $( '#room-name' ).textContent = ( lang() === 'ka' && e.detail.ka ) ? e.detail.ka : t( name || '' );
 		if ( ! on ) return hintOff();
 		if ( hintSaid ) return;
 		hintSaid = true;
@@ -380,6 +534,88 @@ function heroScene() {
 	$( '#room-out' ).addEventListener( 'click',
 		() => window.LP && window.LP.roomTo && window.LP.roomTo( null ) );
 
+	/* ------------------------------------------------- on foot
+	 * The scene says where the visitor is standing (`lp:walk`): the storey,
+	 * the flat or office, the room - in Georgian off the plan's own room
+	 * table - and, in a lift, the stops it offers. The page writes it, draws
+	 * the stops as buttons, and hands the scene a canvas for the minimap. */
+	const wh = $( '#walkhud' ), whHint = $( '#walkhint' );
+	const whStops = $( '#wh-stops' ), whLift = $( '#wh-lift' );
+	let whHinted = false, whStopsKey = '';
+	const levelName = ( d ) => d.level === 'L00' ? t( 'Ground floor' )
+		: d.level === 'L01' ? t( 'Offices' )
+		: d.level === 'ROOF' ? t( 'Roof' )
+		: d.floor ? tf( 'Floor {n} of {all}', { n: d.floor, all: d.floors || FLOORS } ) : d.level;
+	const stopName = ( lv ) => lv === 'L00' ? t( 'Ground' ) : lv === 'L01' ? t( 'Offices' )
+		: /^L\d\d$/.test( lv ) ? String( + lv.slice( 1 ) - 1 ) : lv;
+	const SURF = { corridor: 'Corridor', hall: 'Entrance hall', stair: 'Stairs', half_landing: 'Stairs',
+		lift: 'Lift', sill: 'Lift', terrace: 'Terrace', commercial: 'Commercial floor', street: 'Street',
+		head: 'Stair head', door: 'Doorway', flat: 'Flat', loggia: 'Loggia' };
+	let walkSaid = null;
+	function walkHud( d ) {
+		walkSaid = d;
+		document.body.classList.toggle( 'walking', !! d.on );
+		wh.hidden = ! d.on;
+		if ( ! d.on ) { whHint.hidden = true; return; }
+		$( '#wh-level' ).textContent = levelName( d );
+		$( '#wh-flat' ).textContent = d.flat != null ? tf( 'Flat {n}', { n: d.flat } )
+			: d.office != null ? tf( 'Office {n}', { n: d.office } ) : '';
+		const r = d.room;
+		$( '#wh-room' ).textContent = r ? ( ( lang() === 'ka' && r.ka ) ? r.ka : t( r.name || 'Room' ) )
+			: t( SURF[ d.surface ] || '' );
+		wh.toggleAttribute( 'data-wait', !! d.waiting );
+		// a car: its stops, the one it is at greyed, and where it is going
+		const L = d.lift;
+		whLift.hidden = ! L;
+		if ( L ) {
+			const key = L.id + '|' + L.stops.join( ',' ) + '|' + L.at + '|' + L.to + '|' + L.riding + '|' + lang();
+			if ( key !== whStopsKey ) {
+				whStopsKey = key;
+				whStops.innerHTML = '';
+				for ( const lv of L.stops.slice().reverse() ) {
+					const b = el( 'button', 'wstop' );
+					b.type = 'button';
+					b.textContent = stopName( lv );
+					b.setAttribute( 'aria-label', lv === 'L00' ? t( 'Ground floor' ) : lv === 'L01' ? t( 'Offices' )
+						: tf( 'Floor {n}', { n: + lv.slice( 1 ) - 1 } ) );
+					b.disabled = L.riding || lv === L.at;
+					if ( lv === L.to && L.riding ) b.setAttribute( 'data-to', '' );
+					if ( lv === L.at && ! L.riding ) b.setAttribute( 'data-at', '' );
+					b.addEventListener( 'click', () => { if ( window.LP && window.LP.liftGo ) window.LP.liftGo( lv ); } );
+					whStops.append( b );
+				}
+			}
+		} else whStopsKey = '';
+		if ( ! whHinted ) {
+			whHinted = true;
+			whHint.hidden = false;
+			setTimeout( () => whHint.classList.add( 'gone' ), 7000 );
+			setTimeout( () => { whHint.hidden = true; whHint.classList.remove( 'gone' ); }, 8100 );
+		}
+	}
+	addEventListener( 'lp:walk', ( e ) => walkHud( e.detail || { on: false } ) );
+	// the language can change under a walk: say it again in the new one
+	addEventListener( 'lp:lang', () => { if ( walkSaid ) { whStopsKey = ''; walkHud( walkSaid ); } } );
+	$( '#wh-out' ).addEventListener( 'click', () => window.LP && window.LP.walkExit && window.LP.walkExit() );
+	addEventListener( 'lp:ready', () => { if ( window.LP && 'walkMap' in window.LP ) window.LP.walkMap = $( '#wh-map' ); } );
+	addEventListener( 'keydown', ( e ) => {
+		if ( e.key !== 'Escape' || ! document.body.classList.contains( 'walking' ) || ! window.LP || ! window.LP.walkExit ) return;
+		/* One step out - to the flat the visitor was standing in - and no
+		 * further: the open flat's own Escape (below) must not also take it. */
+		e.stopImmediatePropagation();
+		window.LP.walkExit();
+	} );
+	/* The three entrances (and the terrace stair) on the hero. Delegated: the
+	 * language switch rewrites the line they stand in (i18n works on whole
+	 * elements), and listeners on the old links would go with them. */
+	document.addEventListener( 'click', ( e ) => {
+		const b = e.target.closest && e.target.closest( '[data-walkin]' );
+		if ( ! b ) return;
+		e.preventDefault();
+		toHero();
+		SCENE.walkIn( b.dataset.walkin );
+	} );
+
 	/* ------------------------------------------------- the open flat
 	 * The third step. A click on the floor view opens the flat it lands
 	 * on: the scene comes down onto that one unit with its furniture
@@ -391,14 +627,14 @@ function heroScene() {
 	 *
 	 * The scene says only WHICH of the eight drawn units it is; which
 	 * flat in the inventory that is, and everything printed about it, is
-	 * the page's (`flatAt`). It is answered synchronously, before the
+	 * the page's (`SCENE.flatOf`). It is answered synchronously, before the
 	 * dolly is built, so the shot flies to the window the new card will
 	 * leave rather than to the one the cards were leaving. */
 	addEventListener( 'lp:planfocus', ( e ) => {
-		const { unit, floor } = e.detail;
-		const f = unit >= 0 ? flatAt( floor, unit ) : null;
+		const floor = SCENE.floorOf( e.detail );
+		const f = SCENE.flatOf( e.detail );
 		document.body.classList.toggle( 'flatview', !! f );
-		if ( f ) fillFlatPanel( f, floor );
+		if ( f ) fillFlatPanel( f );
 		else if ( document.body.classList.contains( 'floorview' ) ) fillTypeRail( floor );
 		/* The name on the building's corner is the FLOOR VIEW's and only
 		 * that view's. It used to be rewritten to `Flat 62` here; inside
@@ -547,9 +783,15 @@ function placePager( rail ) {
  * reason - prices climb with the floor. A type with nothing left on this
  * storey still shows, greyed, or the rail would change shape floor to floor
  * and stop reading as the building's four plans. */
+/* A flat card's block line - or, with the owner's switch off (content.js
+ * SHOW_BLOCKS), its entrance alone. */
+const blockRow = ( f ) => SHOW_BLOCKS
+	? `<dt>${ t( 'Block' ) }</dt><dd>${ tf( 'Block {b} · entrance {e}', { b: f.block, e: f.entrance } ) }</dd>`
+	: `<dt>${ t( 'Entrance' ) }</dt><dd>${ String( f.entrance ) }</dd>`;
+
 function fillTypeRail( floor ) {
 	const rail = $( '#typerail' );
-	const on = FLATS.filter( f => f.floor === floor );
+	const on = floor ? FLATS.filter( f => f.floor === floor ) : [];
 	/* The storey's counts, on the cards they count. The view's own name is
 	 * not here: it is written on the top corner of the building instead
 	 * (`#floorlabel`, placed in `tellInset`), on the same line as this one.
@@ -558,7 +800,7 @@ function fillTypeRail( floor ) {
 	 * both crowding the header. */
 	const head = el( 'div', 'thead',
 		`<a class="stepback" href="#top">${ t( '← Back to the street' ) }</a>`
-		+ `<span><b>${ tf( 'Floor {n}', { n: floor } ) }</b> · ${ tf( '{n} flats', { n: on.length } ) } · ${ tf( '{n} floors', { n: SITE.floors } ) }</span>` );
+		+ `<span><b>${ floor ? tf( 'Floor {n} of {all}', { n: floor, all: FLOORS } ) : t( 'Floor' ) }</b> · ${ tf( '{n} flats', { n: on.length } ) }</span>` );
 	$( '.stepback', head ).addEventListener( 'click', ( e ) => {
 		e.preventDefault();
 		if ( window.LP ) window.LP.setScene( 1 );
@@ -568,14 +810,13 @@ function fillTypeRail( floor ) {
 		const mine = on.filter( f => f.type === ty.key );
 		if ( ! mine.length ) continue;
 		const free = mine.filter( f => f.status === 'available' );
-		const area = mine.length > 1
-			? `${ Math.min( ...mine.map( f => f.area ) ) }–${ Math.max( ...mine.map( f => f.area ) ) } m²`
-			: `${ mine[ 0 ].area } m²`;
+		const lo = Math.min( ...mine.map( f => f.areaTotal ) ), hi = Math.max( ...mine.map( f => f.areaTotal ) );
+		const area = lo !== hi ? `${ lo }–${ hi } m²` : `${ lo } m²`;
 		const card = el( 'button', 'tcard',
 			`<img alt="" loading="lazy" src="${ val( ty.plan ) }"${ isPh( ty.plan ) ? ' data-ph="1"' : '' }>`
 			+ `<span><span class="n">${ t( ty.label ) }</span>`
 			+ `<span class="m">${ area } · ${ tf( '{n} on this floor', { n: mine.length } ) }</span>`
-			+ `<span class="p">${ free.length
+			+ `<span class="p" data-ph="1">${ free.length
 				? tf( 'from {price} · {n} free', { price: money( Math.min( ...free.map( f => f.price ) ) ), n: free.length } )
 				: `<span class="gone">${ t( 'none left on this floor' ) }</span>` }</span></span>` );
 		card.type = 'button';
@@ -585,30 +826,8 @@ function fillTypeRail( floor ) {
 }
 
 /* --------------------------------------------------------- the open flat
- * Which flat in the INVENTORY one of the drawing's eight units is.
- *
- * The two counts do not match and cannot be made to. The model's storey is
- * the one modelled flat repeated through the facade's bay rhythm - four
- * bays along the street and four along the back - where the inventory
- * carries six flats to a floor, three of them facing the street. So the
- * street bays are dealt the storey's street flats and the back bays the
- * rest, in the order they stand, and a row that runs out of real flats
- * before it runs out of bays starts again at its first. The card then
- * always names a flat that exists, with its own number, price and status,
- * which is what a visitor is actually choosing between; the drawing under
- * it is the show flat's, which is what every badge on the storey already
- * says it is.
- *
- * Replace `LINE` and `ASPECT` in content.js with the real floor plate and
- * this comes right on its own - nothing here counts to six. */
-const street = ( f ) => /^Street/.test( f.aspect );
-function flatAt( floor, unit ) {
-	const on = FLATS.filter( f => f.floor === floor );
-	if ( ! on.length ) return null;
-	const row = on.filter( f => unit < 4 ? street( f ) : ! street( f ) );
-	const list = row.length ? row : on;
-	return list[ ( unit & 3 ) % list.length ];
-}
+ * Which flat the scene has opened is `SCENE.flatOf` - by the flat's own
+ * number, which the old "unit 0..7 of the modelled row" never was. */
 
 /* The chosen flat's own card, in the column the four type cards were in.
  *
@@ -617,16 +836,14 @@ function flatAt( floor, unit ) {
  * to do about it. The head line above it keeps the shape the storey's
  * counts had - the scene lays the plate's top edge on the line below it,
  * so a different head would move the building. */
-function fillFlatPanel( f, floor ) {
+function fillFlatPanel( f ) {
 	const rail = $( '#typerail' );
-	const ty = TYPES.find( x => x.key === f.type );
 	const st = t( { available: 'Available', reserved: 'Reserved', sold: 'Sold' }[ f.status ] );
-	/* The flat's own number, not its place in a count: they are numbered by
-	 * storey - 65 is the fifth on floor 6 - so "of 72" read as nonsense. */
-	const on = FLATS.filter( x => x.floor === floor ).length;
+	/* The flat's own number - the architect's - not its place in a count. */
+	const on = FLATS.filter( x => x.floor === f.floor ).length;
 	const head = el( 'div', 'thead',
 		`<a class="stepback" href="#top">${ t( '← The whole floor' ) }</a>`
-		+ `<span><b>${ tf( 'Floor {n}', { n: floor } ) }</b> · ${ tf( 'flat {n}', { n: f.n } ) } · ${ tf( '{n} on this floor', { n: on } ) }</span>` );
+		+ `<span><b>${ tf( 'Floor {n} of {all}', { n: f.floor, all: FLOORS } ) }</b> · ${ tf( 'flat {n}', { n: f.n } ) } · ${ tf( '{n} on this floor', { n: on } ) }</span>` );
 	$( '.stepback', head ).addEventListener( 'click', ( e ) => {
 		e.preventDefault();
 		if ( window.LP && window.LP.planFocusTo ) window.LP.planFocusTo( null );
@@ -634,37 +851,56 @@ function fillFlatPanel( f, floor ) {
 	rail.replaceChildren( head );
 	const panel = el( 'div', 'fpanel',
 		`<div class="fphead">
-			<img alt="" loading="lazy" src="${ val( ty.plan ) }"${ isPh( ty.plan ) ? ' data-ph="1"' : '' }>
+			<img alt="" loading="lazy" src="${ val( f.plan ) }"${ isPh( f.plan ) ? ' data-ph="1"' : '' }>
 			<div>
-				<span class="st st-${ f.status }">${ st }</span>
-				<span class="n">${ t( f.label ) }</span>
-				<span class="sub">${ t( f.aspect ) }</span>
-				<span class="ar">${ f.area }<i>m²</i></span>
+				<span class="st st-${ f.status }" data-ph="1">${ st }</span>
+				<span class="n">${ tf( 'Flat {n}', { n: f.n } ) } · ${ t( f.label ) }</span>
+				<span class="sub">${ aspectText( f ) }</span>
+				<span class="ar">${ m2( f.areaTotal ) }<i>m²</i></span>
 			</div>
 		</div>
 		<dl>
-			<dt>${ t( 'Floor' ) }</dt><dd>${ tf( '{n} of {all}', { n: f.floor, all: SITE.floors } ) }</dd>
-			<dt>${ t( 'Aspect' ) }</dt><dd>${ t( f.aspect ) }</dd>
-			<dt>${ t( 'Balcony' ) }</dt><dd>${ f.balcony ? t( 'Yes' ) : t( 'No' ) }</dd>
+			<dt>${ t( 'Floor' ) }</dt><dd>${ tf( '{n} of {all}', { n: f.floor, all: FLOORS } ) }</dd>
+			${ blockRow( f ) }
+			<dt>${ t( 'Area' ) }</dt><dd>${ tf( '{inner} + {balcony} m²', { inner: m2( f.area.inner ), balcony: m2( f.area.balcony ) } ) }</dd>
+			<dt>${ t( 'Aspect' ) }</dt><dd>${ aspectText( f ) }</dd>
 			<dt>${ t( 'Condition' ) }</dt><dd${ isPh( SITE.condition ) ? ' data-ph="1"' : '' }>${ t( val( SITE.condition ) ) }</dd>
 		</dl>
-		<div class="fpprice"><b>${ money( f.price ) }</b><span>${ money( f.price / f.area ) } / m²</span></div>
+		<div class="fpprice" data-ph="1"><b>${ money( f.price ) }</b><span>${ money( f.price / f.areaTotal ) } / m²</span></div>
 		<div class="fpact">
 			<button class="btn btn--amber btn--sm" type="button" data-go="book">${ f.status === 'sold'
 				? t( 'Ask what else is free' ) : t( 'Book a viewing' ) }</button>
+			${ SCENE.canWalk() ? `<button class="btn btn--ghost btn--sm" type="button" data-go="walk">${ t( 'Walk it' ) }</button>` : '' }
 		</div>` );
 	rail.append( panel );
 
 	$( '[data-go="book"]', panel ).addEventListener( 'click', () => {
-		/* Sold flats are not in the enquiry's list - there is nothing to
-		 * book - so the button asks the question that is still worth
-		 * asking and leaves the field on "not decided yet" rather than
-		 * silently failing to select a flat nobody can have. */
-		const sel = $( '#l-flat' );
-		if ( sel ) sel.value = f.status === 'sold' ? '' : String( f.n );
-		$( '#contacts' ).scrollIntoView( { behavior: 'smooth' } );
-		setTimeout( () => $( '#l-name' ).focus(), 600 );
+		bookFlat( f );
 	} );
+	// on foot, in at the flat's own front door
+	const w = $( '[data-go="walk"]', panel );
+	if ( w ) w.addEventListener( 'click', () => SCENE.walkFlat( f ) );
+}
+
+/* The enquiry, with this flat already chosen in it. Sold flats are not in
+ * its list - there is nothing to book - so the field is left on "not
+ * decided yet" rather than silently failing to select one nobody can have. */
+function bookFlat( f ) {
+	const sel = $( '#l-flat' );
+	if ( sel ) sel.value = f && f.status !== 'sold' ? String( f.n ) : '';
+	$( '#contacts' ).scrollIntoView( { behavior: 'smooth' } );
+	setTimeout( () => $( '#l-name' ).focus(), 600 );
+}
+
+/* Which way a flat looks, in the page's language: the plan's compass
+ * letters, joined the way each language joins a list. */
+const SIDE_EN = { N: 'north', S: 'south', E: 'east', W: 'west' };
+function aspectText( f ) {
+	const w = [ ...( f.aspect || '' ) ].map( c => t( SIDE_EN[ c ] ) );
+	if ( ! w.length ) return '–';
+	const s = w.length === 1 ? w[ 0 ]
+		: w.slice( 0, - 1 ).join( ', ' ) + t( ' and ' ) + w[ w.length - 1 ];
+	return s.charAt( 0 ).toUpperCase() + s.slice( 1 );
 }
 
 /* A card is a way into the picker, not a dead tile: it sets the picker to
@@ -676,37 +912,20 @@ function fillFlatPanel( f, floor ) {
  * the chips mean" out here is a copy that goes stale the first time the
  * picker changes. */
 function showType( ty, floor ) {
-	const fFloor = $( '#f-floor' );
-	if ( fFloor ) {
-		fFloor.value = floor;
-		fFloor.dispatchEvent( new Event( 'input', { bubbles: true } ) );
-	}
-	const chip = $( `#f-rooms .chip[data-rooms="${ ty.rooms }"]` );
-	if ( chip ) chip.click();
+	setFilter( { floor: floor ? String( floor ) : 'any', rooms: String( ty.rooms ) } );
 	const sec = $( '#flats' );
 	if ( sec ) sec.scrollIntoView( { behavior: 'smooth', block: 'start' } );
 }
 
-/* Which flat the card describes. Clicking a storey in the street shot opens
- * THAT storey, and the card has to follow it or the hero says floor 12 over
- * a flat standing on the fifth. The unit is the same one all the way up the
- * building - the street corner, the one the tour was fitted to - so it is
- * found by its aspect. The tour's own flat answers for the top of the model
- * and for every other way in, which leaves the "start the tour" button
- * saying exactly what it always said. */
-const CORNER = TOUR.aspect;
-function openOn( floor ) {
-	if ( ! floor || ( window.LP && floor >= window.LP.topFloor ) ) return TOUR;
-	return FLATS.find( f => f.floor === floor && f.aspect === CORNER ) || TOUR;
-}
-
-/* The card the hero shows once the camera is inside a flat. */
+/* The card the hero shows once the camera is inside a flat: the flat the
+ * scene says it is in (`SCENE.flatOf` on the event, else `SCENE.showFlat`). */
 function showTourFlat( f ) {
+	if ( ! f ) return;
 	$( '[data-v="tourBadge"]' ).textContent = t( 'The show flat · ' )
-		+ ( f === TOUR ? 'top floor' : tf( 'floor {n}', { n: f.floor } ) ) + ', corner';
-	$( '[data-v="tourTitle"]' ).textContent = tf( '{label}, {area} m²', { label: t( f.label ), area: f.area } );
+		+ ( SHOW_BLOCKS ? tf( 'flat {n}, floor {f}, block {b}', { n: f.n, f: f.floor, b: f.block } ) : tf( 'flat {n}, floor {f}', { n: f.n, f: f.floor } ) );
+	$( '[data-v="tourTitle"]' ).textContent = tf( '{label}, {area} m²', { label: t( f.label ), area: f.areaTotal } );
 	$( '[data-v="tourFloor"]' ).textContent = f.floor;
-	$( '[data-v="tourArea"]' ).textContent = f.area + ' m²';
+	$( '[data-v="tourArea"]' ).textContent = f.areaTotal + ' m²';
 	$( '[data-v="tourPrice"]' ).textContent = money( f.price );
 }
 
@@ -722,51 +941,243 @@ function walks() {
 	}
 }
 
-/* -------------------------------------------------------- the flat filter
- * The band across the foot of the hero. The grid it used to draw on is
- * gone from the page, so what is left is the controls and their count:
- * the filter still says how many flats answer to it. */
-const filter = { rooms: 'any', floor: 1, price: Infinity };
+/* -------------------------------------------------------- the flat picker
+ * One filter, two sets of controls. The band across the foot of the hero
+ * (hidden for now, at the owner's word, but kept: "we will show it later")
+ * has the bedroom chips, "floor from" and "price up to"; the #flats section
+ * has block, entrance, floor, bedrooms and availability. Both write the
+ * same `filter`, and `apply` redraws both - a chip pressed in one is
+ * pressed in the other. */
+const filter = { block: 'any', entrance: 'any', floor: 'any', rooms: 'any', status: 'any',
+	floorFrom: 1, price: Infinity };
 
-function picker() {
-	const chips = ( sel, key, attr ) => $$( sel + ' .chip' ).forEach( c =>
-		c.addEventListener( 'click', () => {
-			$$( sel + ' .chip' ).forEach( o => o.setAttribute( 'aria-pressed', String( o === c ) ) );
-			filter[ key ] = c.dataset[ attr ];
-			apply();
-		} ) );
-	chips( '#f-rooms', 'rooms', 'rooms' );
+/* the section's chip rows, built from the data so they can never offer a
+ * block, an entrance or a floor that does not exist */
+function pickerChips() {
+	const box = $( '#pickfilters' );
+	if ( ! box ) return;
+	const uniq = ( k ) => [ ...new Set( FLATS.map( f => f[ k ] ) ) ].sort( ( a, b ) => a > b ? 1 : - 1 );
+	const row = ( key, label, opts ) => {
+		const fld = el( 'div', 'fld' );
+		fld.append( el( 'span', null, t( label ) ) );
+		const chips = el( 'div', 'chips' );
+		chips.setAttribute( 'role', 'group' );
+		chips.setAttribute( 'aria-label', t( label ) );
+		for ( const [ v, txt ] of opts ) {
+			const c = el( 'button', 'chip', txt );
+			c.type = 'button';
+			c.dataset.f = key; c.dataset.v = String( v );
+			chips.append( c );
+		}
+		fld.append( chips );
+		box.append( fld );
+	};
+	box.replaceChildren();
+	if ( SHOW_BLOCKS ) row( 'block', 'Block', [ [ 'any', t( 'Any' ) ], ...uniq( 'block' ).map( b => [ b, b ] ) ] );
+	row( 'entrance', 'Entrance', [ [ 'any', t( 'Any' ) ], ...uniq( 'entrance' ).map( e => [ e, String( e ) ] ) ] );
+	row( 'floor', 'Floor', [ [ 'any', t( 'Any' ) ], ...uniq( 'floor' ).map( n => [ n, String( n ) ] ) ] );
+	row( 'rooms', 'Bedrooms', [ [ 'any', t( 'Any' ) ], ...TYPES.map( ty => [ ty.rooms, ty.rooms ? String( ty.rooms ) : t( 'Studio' ) ] ) ] );
+	row( 'status', 'Show', [ [ 'any', t( 'All' ) ], [ 'available', t( 'Available' ) ] ] );
+	applyTitleFont( box );
+}
 
-	const fFloor = $( '#f-floor' ), fPrice = $( '#f-price' );
-	fFloor.max = SITE.floors;
-	fFloor.addEventListener( 'input', () => {
-		filter.floor = + fFloor.value;
-		$( '#o-floor' ).textContent = fFloor.value;
-		apply();
-	} );
-	fPrice.addEventListener( 'input', () => {
-		const v = + fPrice.value;
-		filter.price = v >= + fPrice.max ? Infinity : v;
-		$( '#o-price' ).textContent = v >= + fPrice.max ? 'any' : money( v );
-		apply();
-	} );
-
+function setFilter( patch ) {
+	Object.assign( filter, patch );
 	apply();
 }
 
-function passes( f ) {
+function picker() {
+	$$( '#f-rooms .chip' ).forEach( c => c.addEventListener( 'click', () => setFilter( { rooms: c.dataset.rooms } ) ) );
+
+	const fFloor = $( '#f-floor' ), fPrice = $( '#f-price' );
+	fFloor.min = '1';
+	fFloor.max = String( FLOORS );
+	fFloor.addEventListener( 'input', () => {
+		$( '#o-floor' ).textContent = fFloor.value;
+		setFilter( { floorFrom: + fFloor.value } );
+	} );
+	// the price slider spans the inventory's own prices (placeholders, like them)
+	const lo = Math.floor( Math.min( ...FLATS.map( f => f.price ) ) / 5000 ) * 5000;
+	const hi = Math.ceil( Math.max( ...FLATS.map( f => f.price ) ) / 5000 ) * 5000;
+	fPrice.min = String( lo ); fPrice.max = String( hi ); fPrice.step = '1000'; fPrice.value = String( hi );
+	fPrice.addEventListener( 'input', () => {
+		const v = + fPrice.value;
+		$( '#o-price' ).textContent = v >= + fPrice.max ? t( 'any' ) : money( v );
+		setFilter( { price: v >= + fPrice.max ? Infinity : v } );
+	} );
+
+	pickerChips();
+	const fbox = $( '#pickfilters' );
+	if ( fbox ) fbox.addEventListener( 'click', ( e ) => {
+		const c = e.target.closest( '.chip[data-f]' );
+		if ( c ) setFilter( { [ c.dataset.f ]: c.dataset.v } );
+	} );
+	const list = $( '#flist' );
+	if ( list ) list.addEventListener( 'click', ( e ) => {
+		const r = e.target.closest( '[data-n]' );
+		if ( r ) openFlatCard( flatByN( r.dataset.n ), true );
+	} );
+	apply();
+}
+
+/* The section's own rule. Availability is a chip here, where every status is
+ * drawn in its colour; the hero band's count keeps the rule it always had -
+ * only a flat that can actually be bought is counted. */
+function passes( f, band = false ) {
 	if ( filter.rooms !== 'any' && f.rooms !== + filter.rooms ) return false;
-	// the Availability chips are gone from the band; the count keeps the rule
-	// they defaulted to - only a flat that can actually be bought is counted
-	if ( f.status !== 'available' ) return false;
-	if ( f.floor < filter.floor ) return false;
+	if ( SHOW_BLOCKS && filter.block !== 'any' && f.block !== filter.block ) return false;
+	if ( filter.entrance !== 'any' && f.entrance !== + filter.entrance ) return false;
+	if ( filter.floor !== 'any' && f.floor !== + filter.floor ) return false;
+	if ( f.floor < filter.floorFrom ) return false;
 	if ( f.price > filter.price ) return false;
+	if ( ( band || filter.status === 'available' ) && f.status !== 'available' ) return false;
 	return true;
 }
 
 function apply() {
-	const n = FLATS.filter( passes ).length;
+	const n = FLATS.filter( f => passes( f, true ) ).length;
 	$( '#count' ).innerHTML = tf( n === 1 ? '<b>{n}</b> flat matches' : '<b>{n}</b> flats match', { n } );
+	// both sets of chips show the one filter
+	$$( '#f-rooms .chip' ).forEach( c => c.setAttribute( 'aria-pressed', String( c.dataset.rooms === String( filter.rooms ) ) ) );
+	$$( '#pickfilters .chip[data-f]' ).forEach( c =>
+		c.setAttribute( 'aria-pressed', String( String( filter[ c.dataset.f ] ) === c.dataset.v ) ) );
+	drawList();
+}
+
+/* ------------------------------------------------------------ the list
+ * Every flat that passes, in the architect's numbering, one hairline row
+ * each: number, block and entrance, floor, type, total area, price, status.
+ * The price and the status are placeholders (`data-ph`) - the plans do not
+ * have them. */
+const ST = { available: 'Available', reserved: 'Reserved', sold: 'Sold' };
+let openN = null;
+function drawList() {
+	const list = $( '#flist' );
+	if ( ! list ) return;
+	const sel = FLATS.filter( f => passes( f ) );
+	const out = [ `<div class="frow fhd" aria-hidden="true"><span>${ t( 'Flat' ) }</span><span>${ t( SHOW_BLOCKS ? 'Block' : 'Entrance' ) }</span>`
+		+ `<span>${ t( 'Floor' ) }</span><span>${ t( 'Type' ) }</span><span>${ t( 'Area' ) }</span>`
+		+ `<span>${ t( 'Price' ) }</span><span>${ t( 'Status' ) }</span></div>` ];
+	for ( const f of sel ) {
+		out.push( `<button type="button" class="frow st-${ f.status }${ f.n === openN ? ' on' : '' }" data-n="${ f.n }"`
+			+ ` aria-label="${ tf( 'Flat {n}', { n: f.n } ) }">`
+			+ `<b>${ f.n }</b>`
+			+ `<span>${ SHOW_BLOCKS ? tf( '{b} · entr. {e}', { b: f.block, e: f.entrance } ) : String( f.entrance ) }</span>`
+			+ `<span>${ f.floor }</span>`
+			+ `<span>${ t( f.label ) }</span>`
+			+ `<span class="ar">${ m2( f.areaTotal ) } m²</span>`
+			+ `<span class="pr" data-ph="1">${ money( f.price ) }</span>`
+			+ `<span class="st" data-ph="1"><i></i>${ t( ST[ f.status ] ) }</span></button>` );
+	}
+	if ( ! sel.length ) out.push( `<div class="fempty">${ t( 'No flats match these filters. Change the floor or price range — or let a manager find one for you. <br><a class="btn btn--amber" href="#contacts">Ask a manager</a>' ) }</div>` );
+	list.innerHTML = out.join( '' );
+	applyTitleFont( list );
+	const c = $( '#pickcount' );
+	if ( c ) c.innerHTML = tf( '<b>{n}</b> of {all} flats', { n: sel.length, all: FLATS.length } );
+}
+
+/* ------------------------------------------------------- one flat, in full
+ * The aside beside the list. Its plan is drawn from the architect's own
+ * drawing of THIS flat (web/flatplans.json, fetched the first time a flat
+ * is opened), so it is true for every one of them; the furnished render of
+ * the layout is added only where the flat IS that layout. */
+let PLANS = null;
+const plans = () => PLANS || ( PLANS = fetch( './flatplans.json' ).then( r => r.ok ? r.json() : {} ).catch( () => ( {} ) ) );
+
+function planSvg( p ) {
+	if ( ! p || ! p.o ) return '';
+	const all = [ p.o, ...( p.b || [] ) ].flat();
+	const xs = all.map( q => q[ 0 ] ), ys = all.map( q => q[ 1 ] );
+	const x0 = Math.min( ...xs ) - 0.4, y0 = Math.min( ...ys ) - 0.4;
+	const w = Math.max( ...xs ) + 0.4 - x0, h = Math.max( ...ys ) + 0.4 - y0;
+	const d = ( pts ) => 'M' + pts.map( q => q[ 0 ].toFixed( 2 ) + ' ' + q[ 1 ].toFixed( 2 ) ).join( 'L' ) + 'Z';
+	/* Drawn in the plan's own frame and turned so the street (+y, south) is at
+	 * the foot - the way the architect's sheets read. */
+	return `<svg class="fdplan" viewBox="${ x0.toFixed( 2 ) } ${ y0.toFixed( 2 ) } ${ w.toFixed( 2 ) } ${ h.toFixed( 2 ) }" role="img" aria-label="${ t( 'Plan of the flat' ) }">`
+		+ `<path class="o" d="${ d( p.o ) }"/>`
+		+ ( p.b || [] ).map( b => `<path class="b" d="${ d( b ) }"/>` ).join( '' )
+		+ ( p.r || [] ).map( r => `<path class="r" d="${ d( r ) }"/>` ).join( '' )
+		+ ( p.w || [] ).map( w => `<path class="w" d="M${ w[ 0 ][ 0 ] } ${ w[ 0 ][ 1 ] }L${ w[ 1 ][ 0 ] } ${ w[ 1 ][ 1 ] }"/>` ).join( '' )
+		+ ( p.d ? `<path class="d" d="M${ p.d[ 0 ][ 0 ] } ${ p.d[ 0 ][ 1 ] }L${ p.d[ 1 ][ 0 ] } ${ p.d[ 1 ][ 1 ] }"/>` : '' )
+		+ `</svg>`;
+}
+
+function openFlatCard( f, user = false ) {
+	const box = $( '#fside' );
+	if ( ! box || ! f ) return;
+	openN = f.n;
+	$$( '#flist .frow.on' ).forEach( r => r.classList.remove( 'on' ) );
+	const row = $( `#flist .frow[data-n="${ CSS.escape( f.n ) }"]` );
+	if ( row ) row.classList.add( 'on' );
+	// a link to this flat is its own number
+	if ( user ) history.replaceState( null, '', '#flat-' + f.n );
+	const notes = ISSUES.filter( i => i.n === f.n );
+	const img = isPh( f.plan ) ? '' : `<figure class="fdimg"><img alt="" loading="lazy" src="${ f.plan }">`
+		+ `<figcaption>${ t( 'This layout, furnished' ) }</figcaption></figure>`;
+	const in3d = SCENE.canOpenFlat()
+		? `<button class="btn btn--ghost btn--sm" type="button" data-go="3d">${ t( 'See it in 3D' ) }</button>`
+			+ ( SCENE.canWalk() ? `<button class="btn btn--ghost btn--sm" type="button" data-go="walk">${ t( 'Walk it' ) }</button>` : '' )
+		: ( LP() ? `<button class="btn btn--ghost btn--sm" type="button" data-go="tour">${ t( 'Walk the show flat' ) }</button>` : '' );
+	box.innerHTML = `<div class="fdetail" data-n="${ f.n }">
+		<div class="fdtop"><span class="st st-${ f.status }" data-ph="1"><i></i>${ t( ST[ f.status ] ) }</span>
+			<span class="fdno">${ tf( 'Flat {n}', { n: f.n } ) }</span></div>
+		<h3>${ t( f.label ) }<span>${ aspectText( f ) }</span></h3>
+		<div class="fdar">${ m2( f.areaTotal ) }<i>m²</i></div>
+		<div class="fdplanbox" aria-busy="true"></div>
+		<dl>
+			${ blockRow( f ) }
+			<dt>${ t( 'Floor' ) }</dt><dd>${ tf( '{n} of {all}', { n: f.floor, all: FLOORS } ) }</dd>
+			<dt>${ t( 'Living area' ) }</dt><dd>${ m2( f.area.inner ) } m²</dd>
+			<dt>${ t( f.outdoor.includes( 'loggia' ) && ! f.outdoor.includes( 'balcony' ) ? 'Loggia' : 'Balcony' ) }</dt><dd>${ m2( f.area.balcony ) } m²</dd>
+			<dt>${ t( 'Total' ) }</dt><dd>${ m2( f.area.total ) } m²</dd>
+			<dt>${ t( 'Bedrooms' ) }</dt><dd${ f.typeFrom === 'size' ? ' data-ph="1"' : '' }>${ f.rooms ? f.rooms : t( 'Studio' ) }</dd>
+			<dt>${ t( 'Condition' ) }</dt><dd${ isPh( SITE.condition ) ? ' data-ph="1"' : '' }>${ t( val( SITE.condition ) ) }</dd>
+		</dl>
+		<div class="fdprice" data-ph="1"><b>${ money( f.price ) }</b><span>${ money( f.price / f.areaTotal ) } / m²</span></div>
+		<div class="fdact">
+			<button class="btn btn--amber btn--sm" type="button" data-go="book">${ f.status === 'sold' ? t( 'Ask what else is free' ) : t( 'Book a viewing' ) }</button>
+			${ in3d }
+		</div>
+		${ img }
+		${ notes.length ? `<ul class="fdnotes">${ notes.map( i => `<li>${ i.note || i.kind }</li>` ).join( '' ) }</ul>` : '' }
+	</div>`;
+	$( '[data-go="book"]', box ).addEventListener( 'click', () => bookFlat( f ) );
+	const go3 = $( '[data-go="3d"]', box );
+	if ( go3 ) go3.addEventListener( 'click', () => { if ( SCENE.openFlat( f ) ) scrollTo( { top: 0, behavior: 'smooth' } ); } );
+	/* ...and on foot: the level opens and the visitor walks in at the flat's
+	 * own front door. */
+	const goW = $( '[data-go="walk"]', box );
+	if ( goW ) goW.addEventListener( 'click', () => { if ( SCENE.walkFlat( f ) ) scrollTo( { top: 0, behavior: 'smooth' } ); } );
+	const tour = $( '[data-go="tour"]', box );
+	if ( tour ) tour.addEventListener( 'click', () => window.openTour && window.openTour( SCENE.showFlat() ) );
+	plans().then( ( P ) => {
+		const slot = $( `#fside .fdetail[data-n="${ CSS.escape( f.n ) }"] .fdplanbox` );
+		if ( ! slot ) return;
+		slot.removeAttribute( 'aria-busy' );
+		slot.innerHTML = planSvg( P[ f.n ] );
+	} );
+	applyTitleFont( box );
+	if ( user && innerWidth <= 900 ) box.scrollIntoView( { behavior: 'smooth', block: 'start' } );
+}
+
+/* `#flat-47-a` opens flat 47-a, on arrival and whenever the hash changes. */
+function deepLink() {
+	const go = ( scroll ) => {
+		const m = /^#flat-(.+)$/.exec( decodeURIComponent( location.hash ) );
+		const f = m && flatByN( m[ 1 ] );
+		if ( ! f ) return;
+		// a flat the current filter hides is still opened: the filter is cleared
+		if ( ! passes( f ) ) setFilter( { block: 'any', entrance: 'any', floor: 'any', rooms: 'any', status: 'any', floorFrom: 1, price: Infinity } );
+		openFlatCard( f );
+		if ( scroll ) $( '#flats' ).scrollIntoView();
+	};
+	addEventListener( 'hashchange', () => go( true ) );
+	go( true );
+	if ( ! openN ) {
+		// otherwise the aside starts on the flat the show flat stands for
+		const f = SCENE.showFlat();
+		if ( f ) openFlatCard( f );
+	}
 }
 
 /* ------------------------------------------------------------ price cards */
@@ -779,17 +1190,15 @@ function prices() {
 	for ( const ty of STATS.from ) {
 		const card = el( 'button', 'pcard',
 			`<div class="ty">${ t( ty.label ) }</div>
-			 <div class="pr"><em>${ t( 'from' ) }</em>${ money( ty.from ) }</div>
-			 <div class="lf${ ty.left ? '' : ' none' }">${ ty.left
+			 <div class="pr" data-ph="1"><em>${ t( 'from' ) }</em>${ money( ty.from ) }</div>
+			 <div class="ar">${ ty.area[ 0 ] }–${ ty.area[ 1 ] } m² · ${ tf( '{n} flats', { n: ty.count } ) }</div>
+			 <div class="lf${ ty.left ? '' : ' none' }" data-ph="1">${ ty.left
 				? tf( '{n} available now', { n: ty.left } )
 				: t( 'None left — ask about the next release' ) }</div>` );
 		card.type = 'button';
 		card.addEventListener( 'click', () => {
 			// the price card is a filter: pick the type and jump to the grid
-			$$( '#f-rooms .chip' ).forEach( c =>
-				c.setAttribute( 'aria-pressed', String( c.dataset.rooms === String( ty.rooms ) ) ) );
-			filter.rooms = String( ty.rooms );
-			apply();
+			setFilter( { rooms: String( ty.rooms ) } );
 			const sec = $( '#flats' );
 			if ( sec ) sec.scrollIntoView( { behavior: 'smooth' } );
 		} );
@@ -815,7 +1224,7 @@ function calculator() {
 	const c = $( '#c-price' );
 	c.min = String( Math.floor( Math.min( ...FLATS.map( f => f.price ) ) / 1000 ) * 1000 );
 	c.max = String( Math.ceil( Math.max( ...FLATS.map( f => f.price ) ) / 1000 ) * 1000 );
-	c.value = String( TOUR.price );
+	c.value = String( SCENE.showFlat().price );
 	$( '#c-down' ).value = String( val( SITE.downPct ) );
 	$( '#c-term' ).value = String( val( SITE.months ) );
 	[ '#c-price', '#c-down', '#c-term' ].forEach( s =>
@@ -871,13 +1280,19 @@ function gallery() {
 }
 
 /* ----------------------------------------------------------------- form */
-function form() {
+function formOptions() {
 	const sel = $( '#l-flat' );
-	sel.innerHTML = '<option value="">Not decided yet</option>'
+	const was = sel.value;
+	sel.innerHTML = `<option value="">${ t( 'Not decided yet' ) }</option>`
 		+ FLATS.filter( f => f.status !== 'sold' ).map( f =>
-			`<option value="${ f.n }">${ tf( 'Flat {n} · {label} · {area} m² · {price}', { n: f.n, label: t( f.label ), area: f.area, price: money( f.price ) } ) }</option>`
+			`<option value="${ f.n }">${ tf( 'Flat {n} · {label} · {area} m² · {price}', { n: f.n, label: t( f.label ), area: f.areaTotal, price: money( f.price ) } ) }</option>`
 		).join( '' );
+	sel.value = was;
+}
 
+function form() {
+	formOptions();
+	const sel = $( '#l-flat' );
 	const f = $( '#leadform' );
 	const bad = ( id, msg ) => {
 		$( '#' + id ).setAttribute( 'aria-invalid', String( !! msg ) );
@@ -950,13 +1365,18 @@ function setLang( to, keep = true ) {
 	if ( keep ) keepLang( to );
 	// whatever the page drew for itself is in the other language now
 	if ( was && was !== to ) { redraw(); applyTitleFont(); }
+	// ...and the scene's own words the page writes (the walk's HUD)
+	if ( was && was !== to ) dispatchEvent( new CustomEvent( 'lp:lang', { detail: { lang: to } } ) );
 }
 
 /* The parts that are data rather than copy. They are rebuilt rather than
  * translated in place: every one of them is a template with a number in
  * it, and a template is not a sentence you can look up. */
 function redraw() {
+	pickerChips();
 	apply();
+	if ( openN ) openFlatCard( flatByN( openN ) );
+	formOptions();
 	prices();
 	calculator();
 	gallery();
@@ -988,6 +1408,7 @@ prices();
 calculator();
 gallery();
 form();
+deepLink();
 reveal();
 // ...and the capitals over the parts the page has just built for itself
 applyTitleFont();

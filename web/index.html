@@ -25,6 +25,7 @@
 <link rel="modulepreload" href="./materials.js">
 <link rel="modulepreload" href="./site.js">
 <link rel="modulepreload" href="./content.js">
+<link rel="modulepreload" href="./flats.js">
 <link rel="modulepreload" href="./i18n.js">
 <link rel="modulepreload" href="./vendor/three-min/build/three.tsl.js">
 <link rel="modulepreload" href="./vendor/three-min/examples/jsm/loaders/GLTFLoader.js">
@@ -67,15 +68,11 @@
      an ArrayBuffer - the two travel together on a cold cache. `progress` is
      what the boot bar reads while it is in flight.
 
-     Two files, not one. The street is 5.71 MB on the wire and the first frame
-     waits for it; the show flat is another 3.60 MB that that frame does not
-     draw - it stands inside the block, invisible, until somebody hovers a
-     storey. So the flat is asked for only once the street's own fetch has
-     RESOLVED, which keeps the two off the same link at the same time and
-     leaves the first frame as early as it can be. It has until the hover to
-     arrive, which is the second `prepareScene2` was already spending on
-     compiles. See tools/split_glb.py. If any of this fails, app.js loads
-     each file the ordinary way. -->
+     One file: the street, scene-street.glb, which the first frame waits
+     for. (The show flat that used to follow it is gone with the photo-fitted
+     model; the real building's interiors are separate files the page asks
+     for later.) See tools/split_glb.py. If this fails, app.js loads the
+     file the ordinary way. -->
 <script>
 window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 	var o = { loaded: 0, total: 0 };
@@ -96,14 +93,10 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 		return all.buffer;
 	} );
 	p.progress = o;
-	/* The show flat, behind the street and never beside it. */
-	p.then( function () {
-		if ( ! split ) return;
-		window.__glbFlat = fetch( './scene-flat.glb' ).then( function ( r ) {
-			if ( ! r.ok ) throw new Error( 'scene-flat.glb ' + r.status );
-			return r.arrayBuffer();
-		} );
-	}, function () {} );
+	/* The show flat (scene-flat.glb) is no longer built: the building is the
+	 * real one from the plans now and its interiors arrive as their own
+	 * files (web/interior/, blender/plans/CONTRACT.md), asked for by app.js
+	 * when it needs them. Nothing else is fetched here. */
 	return p;
 } )();
 </script>
@@ -142,6 +135,7 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
     </a>
     <nav id="nav" aria-label="Sections">
       <a href="#about">About</a>
+      <a href="#flats">Flats</a>
       <a href="#location">Location</a>
       <a href="#prices">Prices</a>
       <a href="#gallery">Gallery</a>
@@ -187,6 +181,9 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
     <h1>The building is ready.<br><em>Your flat is waiting.</em></h1>
     <p class="lead">No waiting and no construction risk. Choose a flat online, walk
       through it in 3D, and get the keys right after purchase.</p>
+    <!-- The building's own street doors: each one walks the visitor up to
+         it and in, on foot (app.js "walking the building"). -->
+    <p class="walkin">Walk in: <a href="#walk-C1" data-walkin="1">Entrance 1</a> <a href="#walk-C2" data-walkin="2">Entrance 2</a> <a href="#walk-C3" data-walkin="3">Entrance 3</a></p>
 
     <!-- What is for sale on the storey under the camera. It takes the
          flat card's place in the floor view: the plate fills the display
@@ -244,6 +241,25 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
        its own plan. The scene says where each goes (`lp:planbadge`); the
        badge takes itself off the flat the pointer is furnishing. -->
   <div id="planbadges" aria-hidden="true"></div>
+  <!-- ...and the three entrances of the real building, named at their cores
+       on every level (C1/C2/C3 -> "Entrance 1/2/3"). -->
+  <div id="planents" aria-hidden="true"></div>
+  <!-- The real building's floor view carries up to 23 flats on one plate,
+       so its badges are the same navy pill and amber lozenge, smaller, with
+       the flat's own number in front of its area. -->
+  <style>
+    #planents{position:absolute; inset:0; z-index:2; pointer-events:none}
+    .pent{position:absolute; top:0; left:0; will-change:transform; white-space:nowrap;
+      font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+      color:#fff8ef; background:rgba(29,53,89,.86); padding:3px 8px; border-radius:3px;
+      transition:opacity .4s ease-in-out}
+    .pent[data-off]{opacity:0}
+    .pbadge em{display:none; font-style:normal}
+    .pbadge[data-lv] .pb{gap:4px; padding:2px 7px 2px 3px}
+    .pbadge[data-lv] em{display:block; font-size:10.5px; font-weight:700; padding:0 1px 0 4px; color:#fff8ef}
+    .pbadge[data-lv] b{font-size:11.5px; padding:2px 6px 3px}
+    .pbadge[data-lv] i{display:none}
+  </style>
 
   <!-- One per ROOM of the open flat, standing on the middle of it. The dot
        names its room under the pointer and walks the camera into it when it
@@ -272,6 +288,24 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
     <button class="rout" id="room-out" type="button">Back to the flat</button>
   </div>
 
+  <!-- On foot: where the visitor is standing (the storey, the flat, the
+       room), a map of the storey with a dot on it, the way out - and in a
+       lift, its stops. The scene says what is true (`lp:walk`) and draws
+       the map into the canvas; the page writes the words. Nothing in here
+       carries text of its own in the markup but the button: the rest is
+       written in whichever language is on. -->
+  <div id="walkhud" hidden>
+    <div class="wh-card">
+      <b id="wh-level"></b>
+      <span id="wh-flat"></span>
+      <span id="wh-room"></span>
+    </div>
+    <canvas id="wh-map" width="260" height="130" aria-hidden="true"></canvas>
+    <div id="wh-lift" hidden><div id="wh-stops"></div></div>
+    <button class="rout" id="wh-out" type="button">Leave</button>
+  </div>
+  <p id="walkhint" hidden>Click, then move the mouse to look (Esc frees the cursor) &middot; <b>W A S D</b> to walk &middot; <b>Shift</b> to hurry &middot; on a phone the left thumb walks</p>
+
   <!-- The flat filter sits on the fold: the whole inventory is one slider
        away before the visitor has scrolled anywhere. It drives the same
        picker further down the page - there is only one set of controls. -->
@@ -290,7 +324,7 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
       </div>
       <div class="fld">
         <span>Floor from</span>
-        <div class="rng"><input type="range" id="f-floor" min="1" max="12" value="1"><output id="o-floor">1</output></div>
+        <div class="rng"><input type="range" id="f-floor" min="1" max="9" value="1"><output id="o-floor">1</output></div>
       </div>
       <div class="fld">
         <span>Price up to</span>
@@ -309,11 +343,36 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 <section id="numbers" class="sec sec--tight sec--navy">
   <div class="wrap">
     <div class="nums cells cells-5">
-      <div><div class="k" data-v="floors">12</div><div class="l">Floors</div></div>
-      <div><div class="k" data-v="flats">72</div><div class="l">Flats, <span class="hi"><span data-v="available">17</span> still available</span></div></div>
+      <div><div class="k" data-v="floors">9</div><div class="l">Residential floors, over shops and offices</div></div>
+      <div><div class="k" data-v="flats">191</div><div class="l">Flats in two blocks, <span class="hi"><span data-v="available">17</span> still available</span></div></div>
       <div><div class="k">100<small>%</small></div><div class="l">Built</div></div>
       <div><div class="k sm">Right after<br>purchase</div><div class="l">Keys</div></div>
       <div><div class="k"><span data-v="landmarkMin">25</span><small>min</small></div><div class="l">To <span data-v="landmark">Tbilisi</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== flats -->
+<!-- The building's real flats, from the architect's plans (web/flats.js).
+     site.js builds the chips, the list and the flat's own card; the
+     markup here is only the frame. `#flat-37` opens flat 37. -->
+<section id="flats" class="sec sec--paper" data-rules>
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="eyebrow">Availability</span>
+      <h2 class="hd">Choose your flat — live availability</h2>
+      <p class="lead"><span data-v="flats">191</span> flats in two blocks with three entrances, on <span data-v="floors">9</span> floors over the shops and offices. Green is available, amber is reserved, grey is sold.</p>
+    </div>
+    <div class="filters pickfilters" id="pickfilters"></div>
+    <div class="picker">
+      <div class="pickmain">
+        <div class="pickbar"><span id="pickcount"></span>
+          <span class="legend"><span><i class="dot-available"></i>Available</span><span><i class="dot-reserved"></i>Reserved</span><span><i class="dot-sold"></i>Sold</span></span></div>
+        <div class="flist" id="flist" role="list"></div>
+      </div>
+      <aside class="fside" id="fside" aria-live="polite">
+        <p class="fdhint">Pick a flat on the left and its plan, aspect and price appear here. Everything green can be seen on site today.</p>
+      </aside>
     </div>
   </div>
 </section>
@@ -595,6 +654,7 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
         <h4>The project</h4>
         <ul>
           <li><a href="#about">About</a></li>
+          <li><a href="#flats">Available flats</a></li>
           <li><a href="#location">Location</a></li>
           <li><a href="#prices">Prices &amp; payment</a></li>
         </ul>

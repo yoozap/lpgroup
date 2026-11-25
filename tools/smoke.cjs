@@ -30,16 +30,32 @@ const SHOTS = path.join( __dirname, '..', 'perf-shots' );
 
 	await sleep( 2000 );
 	await shot( '1-street' );
-	await click( 's_2' ); await sleep( 8000 ); await shot( '2-flat' );
-	await click( 'm_top' ); await sleep( 2000 );
-	await click( 't_plan' ); await sleep( 2500 ); await shot( '3-plan' );
-	await click( 't_mirror' ); await sleep( 1500 ); await shot( '4-plan-unmirrored' );
-	await click( 't_mirror' ); await click( 't_plan' );
-	await click( 't_hide' ); await sleep( 1500 ); await shot( '5-no-furniture' );
-	await click( 't_hide' );
+	/* The real building (2026-11-24): scene 2 is a level now. The lab's own
+	 * Scene 2 button opens the show flat's level; the rest is driven through
+	 * window.LP, which the lab carries too. The old show flat's toggles
+	 * (t_plan, t_mirror, t_hide) are gone with it. */
+	const lp = ( js ) => page.evaluate( js );
+	await click( 's_2' ); await sleep( 9000 ); await shot( '2-show-flat' );
+	await lp( "LP.openLevel('L05')" ); await sleep( 6000 ); await shot( '3-level-L05' );
+	await lp( "LP.openLevel('L01')" ); await sleep( 6000 ); await shot( '4-level-L01-offices' );
+	await lp( "LP.openFlat('47-a')" ); await sleep( 7000 ); await shot( '5-flat-47-a' );
+	// a room dot lands the visitor on foot (app.js "walking the building")
+	await lp( "LP.roomTo(0)" ); await sleep( 4000 ); await shot( '6-room' );
+	const onFoot = await lp( "!!(window.__bw && window.__bw.on)" );
+	if ( ! onFoot ) bad.push( 'landing in a room did not start the walk' );
+	await lp( "LP.roomTo(null)" ); await sleep( 3000 );
+	await lp( "LP.closeFlat()" ); await sleep( 2500 );
+	// in at a street door, a few steps into the hall, and back out
+	await lp( "LP.walk({portal:'C1'})" ); await sleep( 7000 );
+	await lp( "window.__bw.step(150,{forward:1})" ); await sleep( 2000 ); await shot( '6b-walk-hall-C1' );
+	const hall = await lp( "window.__bw.s && window.__bw.s.surface" );
+	if ( hall !== 'hall' ) bad.push( 'walking in at C1 did not reach the hall (' + hall + ')' );
+	await lp( "LP.walkExit('street')" ); await sleep( 3000 );
 	await click( 'm_orbit' ); await sleep( 1500 );
 	await click( 'm_hero' ); await sleep( 1500 );
-	await click( 's_1' ); await sleep( 8000 ); await shot( '6-back-to-street' );
+	await click( 's_1' ); await sleep( 6000 ); await shot( '7-back-to-street' );
+	const lv = await lp( "JSON.stringify(window.__lv())" );
+	console.log( 'levels', lv.slice( 0, 400 ) );
 	await click( 't_ao' ); await sleep( 1200 ); await click( 't_ao' );
 	await click( 't_grade' ); await sleep( 1200 ); await click( 't_grade' );
 	await sleep( 1500 );

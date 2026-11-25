@@ -1,26 +1,26 @@
 #!/usr/bin/env node
-/* Can a visitor SEE the show flat missing while it is still downloading?
+/* Can a visitor SEE a level missing while its interior is still downloading?
  *
- * This is the rig that should have existed before the model was split, and
- * its absence is why the split shipped broken. The flat's geometry used to
- * be in the scene from boot; splitting it made it a download, which opened
- * a window - as long as that download takes - in which `groups.flat` is
- * empty. Every other rig here waits nine or fourteen seconds before it
- * looks, by which time the flat is long since in, so all of them said the
- * page was fine. The one that could have caught it was run for TIMING and
- * its pictures were never looked at.
+ * Re-pointed at the real building (2026-11-24). The interiors are downloads
+ * now - web/interior/<LEVEL>.glb and cores.glb - fetched when a storey is
+ * hovered or clicked, so the window the old show flat's split opened is
+ * there for every level: the page can be IN the floor view of a level whose
+ * geometry has not arrived. The scene's answer is the gate (`lvWith` in
+ * app.js): a level is only ever opened once its part is `in` - fetched,
+ * welded AND compiled.
  *
- * So this one does the opposite: it throttles the link, drives the page the
- * two ways a visitor can reach the flat, and SHOOTS - repeatedly - through
- * the whole window, reporting what `groups.flat` held in each frame.
+ * This throttles the link, drives the two ways in early - a hover, which
+ * must only light a band and never show a level, and a click, which must
+ * wait - and SHOOTS through the whole window, reporting per frame what the
+ * open level actually holds on screen.
  *
  *   node tools/flatwindow.cjs [mbps] [outdir] [query]
  *   node tools/flatwindow.cjs 4
- *   node tools/flatwindow.cjs 4 perf-shots/win 'glbsplit=0'   # the A/B
+ *   node tools/flatwindow.cjs 4 perf-shots/win 'lvgate=0'   # must FAIL
  *
- * A PASS is: no frame in which the flat is on screen and empty. It prints
- * every sample so the frames can be looked at, because that is the whole
- * point.                                                                 */
+ * A PASS is: no frame in which scene 2 is up with its level's interior not
+ * on screen, AND each route reached what it was testing (a lit band for the
+ * hover, scene 2 for the click) - a route that tested nothing fails. */
 const puppeteer = require( '/Users/wazzap/.npm/_npx/0f94ee7615faf582/node_modules/puppeteer-core' );
 const path = require( 'path' ), os = require( 'os' ), fs = require( 'fs' );
 const sleep = ( ms ) => new Promise( r => setTimeout( r, ms ) );
@@ -28,8 +28,8 @@ const MBPS = + ( process.argv[ 2 ] || 4 );
 const OUT = process.argv[ 3 ] || path.join( __dirname, '..', 'perf-shots', 'flatwindow' );
 const Q = process.argv[ 4 ] || '';
 const W = 1600, H = 900;
-
 const PROFILE = path.join( os.tmpdir(), 'lp-flatwindow' );
+const LEVEL = 'L07';                       // a storey with the street face in view
 
 async function run( how ) {
 	fs.rmSync( PROFILE, { recursive: true, force: true } );
@@ -41,6 +41,8 @@ async function run( how ) {
 	await p.setViewport( { width: W, height: H, deviceScaleFactor: 1 } );
 	const cdp = await p.target().createCDPSession();
 	await cdp.send( 'Network.enable' );
+	// no cache: every interior byte comes over the throttled link
+	await cdp.send( 'Network.setCacheDisabled', { cacheDisabled: true } );
 	await cdp.send( 'Network.emulateNetworkConditions', { offline: false, latency: 40,
 		downloadThroughput: MBPS * 1024 * 1024 / 8, uploadThroughput: MBPS * 1024 * 1024 / 8 } );
 	await p.goto( 'http://127.0.0.1:8777/index.html' + ( Q ? '?' + Q : '' ),
@@ -49,21 +51,18 @@ async function run( how ) {
 		{ timeout: 300000, polling: 50 } );
 	const ready = await p.evaluate( () => performance.now() );
 
-	/* What is on screen, and what the flat actually holds. `shown` is the
-	 * question that matters: is the page DISPLAYING the flat - scene 2, or
-	 * a storey parted in the street - while it has nothing to display. */
+	/* `empty` is the question: is the floor view up while the level it is
+	 * open on has nothing on screen - its part not in, or none of its
+	 * meshes visible. */
 	const probe = () => p.evaluate( () => {
-		const g = window.__groups ? window.__groups() : {};
-		let meshes = 0;
-		if ( g.flat ) g.flat.traverse( ( o ) => { if ( o.isMesh ) meshes ++; } );
-		const f = window.__floor ? window.__floor() : {};
-		const sc = window.__density ? window.__density() : {};
-		const parted = !! ( f.hot && f.armed );
-		const inScene2 = !! ( window.LP && window.LP.scene === 2 );
-		return { meshes, parted, inScene2, armed: !! f.armed, hot: f.hot | 0,
-			shown: parted || inScene2, t: Math.round( performance.now() ) };
+		const s = window.__lv ? window.__lv() : {};
+		const part = ( s.parts || [] ).find( x => x.name === s.open );
+		const inScene2 = !! ( window.LP && window.LP.scene === 2 && s.open );
+		const empty = inScene2 && ! ( part && part.state === 'in' && part.shown && s.shownMeshes > 0 );
+		return { open: s.open || '', state: part ? part.state : '-', meshes: s.shownMeshes | 0,
+			band: s.hotLevel || '', inScene2, empty, waiting: s.waiting || '',
+			t: Math.round( performance.now() ) };
 	} );
-
 	const rows = [];
 	const shoot = async ( tag ) => {
 		const s = await probe();
@@ -72,51 +71,27 @@ async function run( how ) {
 		rows.push( { name, ...s } );
 		return s;
 	};
-
-	/* FIND the facade rather than assuming where it is. A fixed point was
-	 * the first version of this rig and it missed the building entirely -
-	 * every sample came back `hot: 0`, the routes tested nothing, and it
-	 * printed PASS. The hero rides a rail, so the block is in a different
-	 * place every second; the only reliable way in is to sweep until the
-	 * page itself says a storey is lit. */
-	const findFacade = async () => {
-		/* ...and for as long as it takes, not for three passes. A storey
-		 * only reads as lit once the hover is ARMED, and at 4 Mbps that is
-		 * some seconds after the veil - three passes ran out a second or two
-		 * either side of it, so the click route came back "never found the
-		 * facade" about one run in three and the run was vacuous. */
-		for ( const t0 = Date.now(); Date.now() - t0 < 40000; ) {
-			for ( let fy = 0.22; fy <= 0.72; fy += 0.05 ) {
-				for ( let fx = 0.40; fx <= 0.92; fx += 0.04 ) {
-					await p.mouse.move( W * fx, H * fy );
-					await sleep( 16 );
-					const hot = await p.evaluate( () =>
-						( window.__floor ? window.__floor().hot : 0 ) ||
-						( window.__floorUnder ? 1 : 0 ) && 0 );
-					if ( hot ) return [ W * fx, H * fy ];
-				}
-			}
-			await sleep( 400 );
-		}
-		return null;
-	};
+	/* WHERE the storey is: asked of the scene, not assumed - the hero rides
+	 * a rail, so the block is somewhere else every second. */
+	const bandXY = () => p.evaluate( ( id ) => window.__lvBandAt && ( window.__lvBandAt( id, 1, 0.45 )
+		|| window.__lvBandAt( id, 2, 0.5 ) || window.__lvBandAt( id, 3, 0.5 ) ), LEVEL );
 
 	if ( how === 'hover' ) {
-		let at = null;
-		for ( let i = 0; i < 22; i ++ ) {
-			if ( ! at ) at = await findFacade();
-			if ( at ) await p.mouse.move( at[ 0 ] + ( i % 2 ), at[ 1 ] );
-			await sleep( 500 );
+		for ( let i = 0; i < 18; i ++ ) {
+			const xy = await bandXY();
+			if ( xy ) await p.mouse.move( xy[ 0 ] + ( i % 2 ), xy[ 1 ] );
+			await sleep( 400 );
 			if ( i % 3 === 0 ) await shoot( 's' + String( i ).padStart( 2, '0' ) );
 		}
 	} else {
-		// the other way in: a CLICK, which need not come through a hover
-		const at = await findFacade();
-		if ( at ) await p.mouse.click( at[ 0 ], at[ 1 ] );
+		// the other way in: a CLICK, straight away, which need not come through a hover
+		let xy = null;
+		for ( let k = 0; k < 40 && ! xy; k ++ ) { xy = await bandXY(); if ( ! xy ) await sleep( 250 ); }
+		if ( xy ) await p.mouse.click( xy[ 0 ], xy[ 1 ] );
 		else console.log( '   (never found the facade to click)' );
-		for ( let i = 0; i < 22; i ++ ) {
-			await sleep( 500 );
-			if ( i % 3 === 0 ) await shoot( 's' + String( i ).padStart( 2, '0' ) );
+		for ( let i = 0; i < 40; i ++ ) {
+			await sleep( 300 );
+			if ( i % 2 === 0 ) await shoot( 's' + String( i ).padStart( 2, '0' ) );
 		}
 	}
 	await b.close();
@@ -129,38 +104,22 @@ async function run( how ) {
 	const reached = [];
 	for ( const how of [ 'hover', 'click' ] ) {
 		const { ready, rows } = await run( how );
-		/* ...and reached it by the route under test. `shown` is true for a
-		 * parted storey OR for scene 2, and the click route sweeps the
-		 * pointer to find the facade - which arms the hover on the way. So
-		 * a click that never fired would still look "reached" on the
-		 * hover's evidence, and the gate it is there to test would go
-		 * unexercised while the run printed PASS. Each route is held to
-		 * its own signal. */
-		reached.push( { how, ok: how === 'click'
-			? rows.some( r => r.inScene2 )
-			: rows.some( r => r.parted ) } );
+		reached.push( { how, ok: how === 'click' ? rows.some( r => r.inScene2 ) : rows.some( r => r.band ) } );
 		console.log( `\n${ how.toUpperCase() } at ${ MBPS } Mbps${ Q ? '  ?' + Q : '' }   veil lifted at ${ ready } ms` );
-		console.log( '   t ms   flat meshes   armed  hot  scene2   showing the flat?' );
+		console.log( '   t ms   band   waiting  scene2  open  part     meshes   empty level on screen?' );
 		for ( const r of rows ) {
-			const danger = r.shown && r.meshes === 0;
-			if ( danger ) bad ++;
-			console.log( `${ String( r.t ).padStart( 7 ) }   ${ String( r.meshes ).padStart( 11 ) }` +
-				`   ${ ( r.armed ? 'yes' : 'no' ).padStart( 5 ) }  ${ String( r.hot ).padStart( 3 ) }` +
-				`  ${ ( r.inScene2 ? 'yes' : 'no' ).padStart( 6 ) }   ${ r.shown ? 'YES' : 'no' }` +
-				( danger ? '   <-- EMPTY FLAT ON SCREEN' : '' ) );
+			if ( r.empty ) bad ++;
+			console.log( `${ String( r.t ).padStart( 7 ) }   ${ ( r.band || '-' ).padStart( 4 ) }   ${ ( r.waiting || '-' ).padStart( 7 ) }` +
+				`  ${ ( r.inScene2 ? 'yes' : 'no' ).padStart( 6 ) }  ${ ( r.open || '-' ).padStart( 4 ) }  ${ r.state.padEnd( 8 ) }` +
+				` ${ String( r.meshes ).padStart( 6 ) }   ${ r.empty ? 'YES   <-- EMPTY LEVEL ON SCREEN' : 'no' }` );
 		}
 	}
-	/* A route that never reached the flat proves NOTHING, and would print
-	 * PASS all the same - which is the exact shape of the mistake that let
-	 * the split ship. Each route has to end up showing the flat, or the run
-	 * is vacuous and says so. */
 	const vacuous = reached.filter( r => ! r.ok ).map( r => r.how );
-	console.log( `\nframes showing an empty flat: ${ bad }` );
+	console.log( `\nframes showing an empty level: ${ bad }` );
 	for ( const r of reached )
-		console.log( `  ${ r.how } reached the flat: ${ r.ok ? 'yes' : 'NO - this route tested nothing' }` );
+		console.log( `  ${ r.how } reached ${ r.how === 'click' ? 'the floor view' : 'a lit storey' }: ${ r.ok ? 'yes' : 'NO - this route tested nothing' }` );
 	const ok = bad === 0 && ! vacuous.length;
 	console.log( ok ? '\nPASS' : `\nFAIL${ vacuous.length ? ' (vacuous: ' + vacuous.join( ', ' ) + ')' : '' }` );
-	console.log( `frames written to ${ OUT } - LOOK AT THEM; the timings alone are what` );
-	console.log( 'missed this the first time.' );
+	console.log( `frames written to ${ OUT } - LOOK AT THEM.` );
 	process.exit( ok ? 0 : 1 );
 } )();

@@ -8,7 +8,7 @@ import {
 	bumpMap, saturate, sub, mul, add, oneMinus, fract, sin, floor, length,
 	cameraPosition, screenUV, screenCoordinate, step, select, normalLocal, time, exp,
 	texture, cameraViewMatrix, normalize, frontFacing, vertexColor,
-	cross, equirectUV, uv,
+	cross, equirectUV, uv, positionLocal,
 } from 'three/tsl';
 
 const SR = ( h ) => {
@@ -567,11 +567,18 @@ export function buildMaterials( THREE, opts ) {
 		return m;
 	}
 
-	/* The room behind a flat. Floors every 3 m from the podium roof, party
-	 * walls every quarter bay, 4.4 m deep - the real plan depth of these
-	 * blocks less the corridor. */
+	/* The room behind a flat. Floors every 3.3 m from the podium roof at
+	 * +4.80 (the real plan's levels - CONTRACT.md: L01 +4.8, then 3.3 m a
+	 * storey), party walls every quarter bay, 4.4 m deep, and the ceiling
+	 * at the plan's 3.00 m clear. The storey grid has to be the building's:
+	 * left on the old block's 4.65 + 3.0 m it drifted 0.3 m a storey against
+	 * the real panes, and a few of them came out as sun-coloured bloom
+	 * blobs across the bar (found and isolated by the exterior stage, gone
+	 * with these numbers). Only positions and sizes of the building moved
+	 * here - base, pitch, ceil, and the shopfront's storey below; the
+	 * window's own sill/head, the room's width and depth are unchanged. */
 	const FLAT = {
-		room: true, base: 4.65, pitch: 3.00, w: 2.9325, depth: 4.40, ceil: 2.70,
+		room: true, base: 4.80, pitch: 3.30, w: 2.9325, depth: 4.40, ceil: 3.00,
 		sill: 0.78, head: 2.66, blindZ: 0.07, blinds: 1.0, furniture: 1.0,
 		wall: [ 1.0, 1.0, 1.0 ], skyGain: 0.075, blindSky: 0.42,
 		lamp: 0.0, lampAll: 0.0,
@@ -598,11 +605,11 @@ export function buildMaterials( THREE, opts ) {
 		sill: 0.18, head: 2.58, f0: 0.15, grime: 0.10, clarity: 1.0,
 	} );
 
-	/* The shopfront. Its own grid: one storey 4.65 m tall standing on the
+	/* The shopfront. Its own grid: one storey 4.80 m tall standing on the
 	 * street, rooms two bays wide because a shop is not divided every 3 m,
 	 * 6.5 m deep, and the light on all day. */
 	M.glass_shop = glazing( 'glass_shop', { ...FLAT,
-		base: 0.0, pitch: 4.65, w: 9.40, depth: 6.50, ceil: 4.05,
+		base: 0.0, pitch: 4.80, w: 9.40, depth: 6.50, ceil: 4.50,
 		sill: 0.55, head: 3.90, blinds: 0.0, furniture: 1.0,
 		skyGain: 0.085, lamp: 0.85, lampAll: 1.0,
 		grime: 0.10, rough: 0.018, bow: 0.014, env: 0.72,
@@ -1525,6 +1532,214 @@ export function buildMaterials( THREE, opts ) {
 		const base = m.colorNode || vec3( c.r, c.g, c.b );
 		const glow = base.mul( GLOW_TINT ).mul( roomLift );
 		m.emissiveNode = m.emissiveNode ? m.emissiveNode.add( glow ) : glow;
+	}
+
+	/* ---------------------------------------------------------- the lift
+	 * A car's surfaces, grained in the CAR's frame. The interiors are welded
+	 * in world metres and a car rides on its mesh matrix, so positionLocal
+	 * is the car at rest: the grain rides with the walls. The same surfaces
+	 * grained in world space (`grain`) stood still while the car moved
+	 * through them, and from inside the walls seemed to slide. Same colours
+	 * and finishes as the materials they stand in for (levels.js picks
+	 * `lift_<name>` for any car part that has one). */
+	const lgrain = ( scale, oct ) => mx_fractal_noise_float( positionLocal.mul( scale ), oct, 2.0, 0.5, 1.0 );
+	const liftMetal = ( name, hex, rough, metal ) => {
+		const m = new THREE.MeshStandardNodeMaterial();
+		m.name = name;
+		/* brushed: the grain stretched across the run of a panel, in height */
+		const n = mx_fractal_noise_float( positionLocal.mul( vec3( 9.0, 70.0, 9.0 ) ), 3, 2.0, 0.5, 1.0 );
+		m.colorNode = vec3( ...SR( hex ) ).mul( float( 1.0 ).add( n.mul( 0.08 ) ) );
+		m.roughnessNode = clamp( float( rough ).add( n.mul( 0.06 ) ), 0.02, 1.0 );
+		m.metalnessNode = float( metal );
+		return m;
+	};
+	M.lift_frame_light = liftMetal( 'lift_frame_light', '#d9d6ce', 0.48, 0.30 );
+	M.lift_chrome = liftMetal( 'lift_chrome', '#cdd0d4', 0.16, 1.0 );
+	M.lift_int_mirror = ( () => {
+		const m = new THREE.MeshStandardNodeMaterial();
+		m.name = 'lift_int_mirror';
+		m.colorNode = vec3( ...SR( '#e0e4e9' ) );
+		m.roughnessNode = float( 0.03 );
+		m.metalnessNode = float( 1.0 );
+		return m;
+	} )();
+	M.lift_int_stone_dark = ( () => {
+		const m = new THREE.MeshStandardNodeMaterial();
+		m.name = 'lift_int_stone_dark';
+		const n = lgrain( 12.0, 2 );
+		m.colorNode = vec3( ...SR( '#3a3a3c' ) ).mul( float( 1.0 ).add( n.mul( 0.08 ) ) );
+		m.roughnessNode = clamp( float( 0.32 ).add( n.mul( 0.04 ) ), 0.02, 1.0 );
+		m.metalnessNode = float( 0.0 );
+		return m;
+	} )();
+	M.lift_int_black = ( () => {
+		const m = new THREE.MeshStandardNodeMaterial();
+		m.name = 'lift_int_black';
+		m.colorNode = vec3( ...SR( '#111214' ) );
+		m.roughnessNode = float( 0.40 );
+		m.metalnessNode = float( 0.2 );
+		return m;
+	} )();
+	M.lift_int_lamp_shade = ( () => {
+		const m = new THREE.MeshStandardNodeMaterial();
+		m.name = 'lift_int_lamp_shade';
+		m.colorNode = vec3( ...SR( '#f1e8d6' ) );
+		m.roughnessNode = float( 0.7 );
+		m.metalnessNode = float( 0.0 );
+		m.emissiveNode = vec3( ...SR( '#ffd9a6' ) ).mul( 0.25 );
+		m.side = THREE.DoubleSide;
+		return m;
+	} )();
+	/* The call button's lamp: green once the car has been called, and a
+	 * milky unlit lens the rest of the time. */
+	M.lift_green = ( () => {
+		const m = new THREE.MeshStandardNodeMaterial();
+		m.name = 'lift_green';
+		m.colorNode = vec3( ...SR( '#3cff6e' ) );
+		m.emissiveNode = vec3( ...SR( '#38ff66' ) ).mul( 6.0 );
+		m.roughnessNode = float( 0.45 );
+		m.metalnessNode = float( 0.0 );
+		return m;
+	} )();
+	M.lift_lamp_off = ( () => {
+		const m = new THREE.MeshStandardNodeMaterial();
+		m.name = 'lift_lamp_off';
+		m.colorNode = vec3( ...SR( '#c9ccc8' ) );
+		m.emissiveNode = vec3( ...SR( '#d8dcd6' ) ).mul( 0.08 );
+		m.roughnessNode = float( 0.35 );
+		m.metalnessNode = float( 0.0 );
+		return m;
+	} )();
+
+	// ---------------------------------------------------------- hood (neighbours)
+	/* The neighbour blocks of blender/lib_hood.py, matched to the architect's
+	 * renders (001-005, NT_01): honed stone panels in stack bond above, granite
+	 * ashlar on the pilaster order and ground storey, black shopfront piers,
+	 * navy awnings, warm grey zinc roofs. The geometry has no UVs, so everything is laid
+	 * out from world position: course joints sit on the building's storey grid
+	 * (4.80 + n x 3.30), and every joint is box-filtered by its own screen
+	 * width so it thins to its mean tone instead of aliasing across a block
+	 * 150 m away. The one map is a seamless grey granite speckle (hood_grain,
+	 * generated, mean 0.5), read once per pixel off the face's own plane. */
+	{
+		const P = positionWorld, aN = abs( normalWorld );
+		const xFacing = aN.x.greaterThan( aN.z );
+		const flat = aN.y.greaterThan( 0.7 );
+		// along the wall, signed by the normal so a back face is not mirrored
+		const along = select( xFacing, P.z.mul( normalWorld.x.sign().negate() ),
+			P.x.mul( normalWorld.z.sign() ) );
+		const plane = select( xFacing, P.x, P.z ).mul( 3.0 ).floor();   // which wall
+		const faceUV = select( flat, P.xz, vec2( along, P.y ) );
+		const speck = ( tile ) => maps.hoodGrain
+			? texture( maps.hoodGrain, faceUV.mul( 1 / tile ) ).r.sub( 0.5 )
+			: float( 0.0 );
+		/* a joint of half width hw (in cell units) on the integer lines of t,
+		 * box-filtered: it keeps its integral as it narrows under a pixel and
+		 * settles to its mean once the cells themselves go sub-pixel */
+		const joint = ( t, hw ) => {
+			const fw = t.fwidth().max( 1e-5 );
+			const f = fract( t );
+			const d = min( f, f.oneMinus() );
+			const W = max( fw, float( 2 * hw ) );
+			const line = smoothstep( W.mul( 0.5 ).add( fw.mul( 0.5 ) ), W.mul( 0.5 ).sub( fw.mul( 0.5 ) ), d )
+				.mul( float( 2 * hw ).div( W ) );
+			return mix( line, float( 2 * hw ), smoothstep( float( 0.25 ), float( 0.7 ), fw ) );
+		};
+		const storeyF = fract( P.y.sub( 4.80 ).div( 3.30 ) );       // 0 floor .. 1 next floor
+		const hood = ( name ) => {
+			const m = new THREE.MeshStandardNodeMaterial();
+			m.name = name;
+			m.metalnessNode = float( 0.0 );
+			return m;
+		};
+
+		/* Upper floors: 0.66 m honed panels, stack bond, five courses a storey
+		 * (005: 22 px periods at 33 px/m), 12 mm joints at 0.6 of the face,
+		 * one tone per panel (SD 1.6%) and a fine speckle (SD 4.6%). */
+		M.hood_panel = ( () => {
+			const m = hood( 'hood_panel' );
+			const PAN = 0.66, HW = 0.008 / PAN;   // drawn a touch wide: the groove's shadow
+			const tu = select( flat, P.x, along ).div( PAN );
+			const tv = select( flat, P.z, P.y.sub( 4.80 ) ).div( PAN );
+			const line = max( joint( tu, HW ), joint( tv, HW ) );
+			const tone = panelHash( vec3( tu.floor(), tv.floor(), plane ) ).sub( 0.5 ).mul( 0.056 );
+			const g = speck( 1.5 );
+			// a faint grime band under each sill line and the parapet
+			const sill = smoothstep( float( 0.62 ), float( 0.70 ), storeyF )
+				.mul( smoothstep( float( 0.80 ), float( 0.72 ), storeyF ) );
+			m.colorNode = vec3( ...SR( '#cbbcaa' ) )
+				.mul( float( 1.0 ).add( tone ).add( g.mul( 0.35 ) ) )
+				.mul( float( 1.0 ).sub( sill.mul( 0.05 ) ) )
+				.mul( float( 1.0 ).sub( line.mul( 0.30 ) ) );
+			m.roughnessNode = float( 0.70 ).add( line.mul( 0.15 ) );
+			m.normalNode = bumpMap( g.mul( 0.15 ).sub( line ), float( 0.20 ) );
+			return m;
+		} )();
+
+		/* The pilaster order and the storeys under the panels: rough granite in
+		 * broken-course ashlar, 0.165 m courses (20 a storey), blocks 0.30-0.45
+		 * m long, joints barely there, strong block-to-block tone (SD 6%) and a
+		 * fine speckle, faint rain streaks down from every cornice and a
+		 * grime band in the cornice's lee. */
+		M.hood_stone_low = ( () => {
+			const m = hood( 'hood_stone_low' );
+			const CH = 3.30 / 20;
+			const tv = select( flat, P.z.div( 0.40 ), P.y.sub( 4.80 ).div( CH ) );
+			const row = tv.floor();
+			const rh = panelHash( vec3( row, plane, 1.3 ) );
+			const len = rh.mul( 0.15 ).add( 0.30 );
+			const tu = select( flat, P.x, along ).div( len ).add( rh.mul( 7.0 ) );
+			const line = max( joint( tv, 0.006 / CH ), joint( tu, 0.006 / 0.375 ) );
+			const tone = panelHash( vec3( tu.floor(), row, plane ) ).sub( 0.5 ).mul( 0.09 );
+			const g = speck( 0.7 );
+			const streak = smoothstep( float( 0.15 ), float( 0.55 ),
+				mx_noise_float( vec3( along.mul( 4.5 ), P.y.mul( 0.45 ), plane.mul( 0.7 ) ) ) )
+				.mul( storeyF.mul( 0.7 ).add( 0.3 ) ).mul( select( flat, float( 0 ), float( 1 ) ) );
+			const lee = smoothstep( float( 0.80 ), float( 0.86 ), storeyF )
+				.mul( smoothstep( float( 0.93 ), float( 0.89 ), storeyF ) );
+			m.colorNode = vec3( ...SR( '#9a8a76' ) )
+				.mul( clamp( float( 1.0 ).add( tone ).add( g.mul( 0.4 ) ), 0.55, 1.5 ) )
+				.mul( float( 1.0 ).sub( streak.mul( 0.15 ) ).sub( lee.mul( 0.12 ) ) )
+				.mul( float( 1.0 ).sub( line.mul( 0.25 ) ) );
+			m.roughnessNode = float( 0.88 );
+			m.normalNode = bumpMap( g.mul( 0.35 ).sub( line.mul( 0.5 ) ), float( 0.30 ) );
+			return m;
+		} )();
+
+		/* Low hipped roofs: warm grey pre-weathered zinc, a step darker than the walls, standing seams down the
+		 * slope every 0.45 m that catch the sun along one edge. */
+		M.hood_roof = ( () => {
+			const m = hood( 'hood_roof' );
+			const t = select( xFacing, P.z, P.x ).div( 0.45 );
+			const seam = joint( t, 0.012 / 0.45 );
+			const sheet = panelHash( vec3( t.floor(), 0.0, 2.1 ) ).sub( 0.5 ).mul( 0.04 );
+			m.colorNode = vec3( ...SR( '#74685c' ) ).mul( float( 1.0 ).add( sheet ) )
+				.mul( float( 1.0 ).sub( seam.mul( 0.15 ) ) );
+			m.roughnessNode = float( 0.60 );
+			m.metalnessNode = float( 0.05 );
+			m.normalNode = bumpMap( seam, float( 0.35 ) );
+			return m;
+		} )();
+
+		/* Dark and smooth: the shopfronts' black stone (piers, plinth, fascia
+		 * and mullions round the main building's glass_shop panes) and the
+		 * upper windows, which the renders show as dark glass, not blinds.
+		 * Semi-gloss, so the sky comes back soft and it parts from the
+		 * lit shop glass. */
+		M.hood_shopglass = ( () => {
+			const m = hood( 'hood_shopglass' );
+			m.colorNode = vec3( ...SR( '#2a2724' ) );
+			m.roughnessNode = float( 0.25 );
+			return m;
+		} )();
+
+		// navy canvas over the shop bays
+		M.hood_awning = ( () => {
+			const m = hood( 'hood_awning' );
+			m.colorNode = vec3( ...SR( '#2a3650' ) );
+			m.roughnessNode = float( 0.90 );
+			return m;
+		} )();
 	}
 
 	return { materials: M, SUN, SUNC, XRAY };

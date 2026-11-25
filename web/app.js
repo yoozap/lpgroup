@@ -22,6 +22,10 @@ import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberratio
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeSky, skyEquirect, dither, SKY_LOOK } from './sky.js';
 import { buildMaterials } from './materials.js';
+/* The real building's floors - the plan frame, the level and flat lookup,
+ * the interiors' weld and the floor view's drawing. See levels.js. */
+import * as LVL from './levels.js';
+import { createWalker, furnitureSolids, WALK as BW } from './walk.js';
 
 /* ------------------------------------------------------------------ *
  * Camera solved from the reference photograph.
@@ -134,7 +138,7 @@ let splitT = 0.5;
 const DEV = new URLSearchParams( location.search ).has( 'dev' );
 let gizmo = null, picked = null;
 const moved = new Map();
-const groups = { main: null, tower: null, cut: null, flat: null };
+const groups = { main: null, tower: null, cut: null, flat: null, leaf: null };
 /* Going into the flat, the piece of building standing over it - roof,
  * parapet, the top-floor facade and gable, the mass - is sliced away by a
  * horizontal plane that sweeps down from the roof to the flat's floor, so
@@ -166,6 +170,9 @@ const easeInOut = ( t ) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow( - 2 * t + 2, 
 const smoother = ( t ) => t * t * t * ( t * ( t * 6 - 15 ) + 10 );
 const gradeAmount = uniform( 1.0 );
 const aoStrength = uniform( 1.0 );
+/* How much of the street's vignette a frame wears: all of it on the street,
+ * less under a ceiling (see `bwLight`). 1 is the street's grade exactly. */
+const vignAmount = uniform( 1.0 );
 
 /* ------------------------------------------------------------------ idling
  * The shot stands still unless something moves it, so the page stops redrawing
@@ -623,6 +630,7 @@ function rate() {
  * once and kept. Everything that changes what casts - the cut sweeping down, a
  * scene switch, a piece dragged in developer mode - asks for a fresh one. */
 let sun = null;
+let hemi = null;                 // the sky's fill - and, walking, the room's: see `bwLight`
 const shadowDirty = () => { if ( sun ) sun.shadow.needsUpdate = true; };
 /* Scene 2's maps and pipelines, fetched and compiled once the street is up. */
 let maps = null, scene2Ready = null, planTex = null;
@@ -638,7 +646,18 @@ let sceneMaterials = null, glbLoader = null, glbDraco = null, flatReady = null;
  * be wrong rather than three. With the split off this is true from the
  * start and `withFlat` is a straight call. */
 let flatIn = false;
+/* The real-plan rebuild (blender/plans/CONTRACT.md): the building is the
+ * architect's now, and the invented show flat - scene-flat.glb, the storey
+ * hover, scene 2, the floor view, the rooms and the walk, all of which were
+ * built on that one flat - is not built any more. Until the next stage puts
+ * them back on the real interiors (web/interior/*.glb, web/plan_meta.json)
+ * every way into them is shut HERE, quietly: `withFlat` does nothing,
+ * `loadFlat`/`prepareScene2` fetch and warm nothing, the hover never arms,
+ * and `setScene( 2 )` is refused. The street, the rail, the lab's orbit and
+ * fly modes are untouched. */
+const FLAT_GONE = true;
 const withFlat = ( fn ) => {
+	if ( FLAT_GONE ) return;
 	if ( flatIn ) return fn();
 	loadFlat().then( fn, fn );        // a flat that fails still opens, empty
 };
@@ -801,7 +820,8 @@ async function init() {
 	sun.shadow.autoUpdate = false;
 	sun.shadow.needsUpdate = true;
 	scene.add( sun );
-	scene.add( new THREE.HemisphereLight( 0x9ab4d8, 0x56503f, 0.22 ) );
+	hemi = new THREE.HemisphereLight( 0x9ab4d8, 0x56503f, 0.22 );
+	scene.add( hemi );
 
 	// ------------------------------------------------------------- model
 	step( 30, 'loading geometry' );
@@ -854,6 +874,8 @@ async function init() {
 	step( 64, 'shading surfaces' );
 	meta = await metaReq;
 	adoptPlan( meta );               // the plan the build measured, not our copy
+	// plan metres <-> world, for everything the real building's levels do
+	frameP = LVL.makeFrame( meta );
 	await streetMaps;
 	// the sky goes in with the scanned maps: the glazing samples it for the
 	// light coming in through a window, with the same projection the
@@ -885,7 +907,7 @@ async function init() {
 	// OrbitControls re-aims the camera in its constructor, so give it the hero
 	// target first and restore the exact shot afterwards.
 	controls = new OrbitControls( camera, renderer.domElement );
-	controls.target.set( 10, 17, -95 );
+	controls.target.copy( siteCenter() );
 	controls.enableDamping = true;
 	controls.dampingFactor = 0.08;
 	controls.enabled = false;
@@ -902,16 +924,18 @@ async function init() {
 			 * it is theirs again, because there a drag is a visitor
 			 * turning on the spot. */
 			drag: () => ! planDragOwns() || roomFocus >= 0,
+			freeLook: () => bwOn,
 			walk: walkStep,
 			speed: 11,
 			bounds: () => sceneNo === 2
 				? { at: orbitTarget(), reach: 26, top: orbitTarget().y + 14 }
-				: { at: new THREE.Vector3( 10, 10, - 95 ), reach: 190, top: 130 },
+				: { at: siteCenter(), reach: 190, top: 130 },
 		} )
 		// the lab keeps flying as a mode, but a flat walked into is walked
 		// in there too - see `setMode`
-		: makeFlyControls( camera, renderer.domElement, { walk: walkStep } );
+		: makeFlyControls( camera, renderer.domElement, { walk: walkStep, freeLook: () => bwOn } );
 	resetShot();
+	bwTouchWire( renderer.domElement );
 
 	wireUI();
 	if ( EMBED ) initEmbed();
@@ -939,6 +963,20 @@ async function init() {
 	// the 4 s fallback is for a page whose flat never warms at all, and it
 	// stays that long so `?warmfloor=0` reproduces the old behaviour exactly
 	setTimeout( endWarm, Math.max( 4000, WARM_FLOOR ) + 16 );
+	if ( FLAT_GONE ) {
+		// the lab has no page around it, but the rigs drive it the same way
+		if ( ! EMBED ) lvInstallApi( window.LP = window.LP || { invalidate } );
+		/* The plan's own data is small and nothing waits for it - fetched
+		 * behind the first frame so the first hover can name its flats. */
+		setTimeout( () => { LVL.planMeta().then( ( pm ) => { lvPM = pm; }, () => {} );
+			LVL.roomsLite().then( ( r ) => { lvLite = r; } ); }, 1200 );
+		/* `#flat-37` opens flat 37 in the scene as well as on the page;
+		 * `#walk-C1` and `#flat-37/walk` walk in (see `bwHash`). */
+		const hs = decodeURIComponent( location.hash || '' );
+		const m = /^#flat-([^/]+)$/.exec( hs );
+		if ( /^#walk-|\/walk$/.test( hs ) ) setTimeout( bwHash, 400 );
+		else if ( m ) setTimeout( () => lvOpenFlat( m[ 1 ] ), 400 );
+	}
 	announce( 'ready' );
 	// Everything Scene 2 needs - the show flat's maps and its pipelines - is
 	// fetched and compiled in the background once the street is up.
@@ -963,7 +1001,24 @@ async function init() {
 	 * warm cannot start when the pointer arrives AND be finished when it
 	 * arrives. So it starts a breath after the page appears, and the intent
 	 * listeners only bring that breath forward. */
-	if ( WARM2 ) {
+	/* The levels' turn at the same breath: every storey shares its materials
+	 * with every other, walls and furniture both, so one storey built behind
+	 * the street is the pipelines of all of them. Without it the first floor
+	 * a visitor opens stands unfurnished under the pointer for the 4-5 s its
+	 * furniture takes to compile. */
+	if ( FLAT_GONE ) {
+		if ( ! EMBED ) setTimeout( lvPrewarm, 1200 );
+		else {
+			const go = () => lvPrewarm();
+			const once = { once: true, passive: true };
+			renderer.domElement.addEventListener( 'pointermove', go, once );
+			addEventListener( 'wheel', go, once );
+			addEventListener( 'scroll', go, once );
+			addEventListener( 'keydown', go, once );
+			setTimeout( go, WARM2_AFTER );
+		}
+	}
+	if ( WARM2 && ! FLAT_GONE ) {
 		/* The flat's 24 maps are a download, not a compile - they cost the
 		 * GPU nothing and they are the first thing the warm awaits - so they
 		 * are on the wire from here, before anything asks for them. */
@@ -1002,6 +1057,10 @@ const WARM = new URLSearchParams( location.search ).get( 'warm' ) || 'first';
  * never overlap a frame: `compiling` holds the loop off, and every compile
  * here is awaited one at a time. */
 let compiling = false;
+let compileSince = 0;            // when the loop was last lent out (frame), 0 when it is not
+/* A held frame shorter than this passes for a hitch; longer, a walk's HUD
+ * shows its waiting mark rather than leaving a frozen picture unexplained. */
+const BW_HOLD_CUE = 300;
 const WARM2 = new URLSearchParams( location.search ).get( 'warm2' ) !== '0';
 /* ...and how long the page waits for a visitor to touch something before it
  * warms the flat anyway. ?warm2after= in ms. */
@@ -1119,6 +1178,7 @@ async function warmUp() {
 			};
 		} )() : null;
 		const unglass = warmFloorGlass();
+		const unband = lvWarmBands();          // ...and the storey bands' pipeline
 		/* ...and the pipelines that frame needs are built SIDE BY SIDE first.
 		 * See `pipesGather`: this is the difference between a first visit of
 		 * thirty seconds and one of a few. The first `render()` draws nothing
@@ -1168,6 +1228,7 @@ async function warmUp() {
 		pipeline.render();
 		const tDrawn = performance.now();
 		unglass();
+		unband();
 		if ( unwarm ) unwarm();
 		if ( ! sw && sun ) sun.shadow.needsUpdate = true;
 		/* ...and then WAIT for it. Drawing it is not the same as having it:
@@ -1436,6 +1497,7 @@ const compiledPromise = () => scene2Compiled
  * things that only make sense once the flat exists: its materials are
  * split by job for the floor view, and the welded results are patched. */
 async function loadFlat() {
+	if ( FLAT_GONE ) return false;           // nothing to load: see FLAT_GONE
 	// with the split off, the flat came in with the street and `optimise`
 	// has already welded it into `groups.flat`
 	if ( ! GLB_SPLIT ) { flatIn = true; return true; }
@@ -1484,6 +1546,7 @@ async function loadFlat() {
 }
 
 function prepareScene2() {
+	if ( FLAT_GONE ) return Promise.resolve( false );     // see FLAT_GONE
 	if ( scene2Ready ) return scene2Ready;
 	compiledPromise();                            // so the hover has it to wait on
 	scene2Ready = ( async () => {
@@ -1575,6 +1638,7 @@ const MAP_FILES = [
 	[ 'concreteNor', 'concrete_nor.webp', 0, 0 ],
 	[ 'railDiff', 'rail_diff.webp', 1, 0 ],
 	[ 'railDisp', 'rail_disp.webp', 0, 0 ],
+	[ 'hoodGrain', 'hood_grain.webp', 0, 0 ],   // the neighbours' granite speckle (data, grey)
 	[ 'parquetDiff', 'parquet_diff.webp', 1, 1 ],
 	[ 'parquetRough', 'parquet_rough.webp', 0, 1 ],
 	[ 'parquetNor', 'parquet_nor.webp', 0, 1 ],
@@ -1689,20 +1753,95 @@ function applyMaterials( root, M ) {
 }
 
 /* -------------------------------------------- batching: instance then merge */
-/* Block A, by the names the build gives its pieces: its own merged meshes
- * are `A_*`, its street windows are `winA_*` and `winB_*` and its loggias
- * are `loggia_<part>_f<storey>_b<bay>`. Block B's kit is deliberately not
- * caught - its loggias carry the block in the part's name
- * (`loggia_frameB1_f3_y2`) and its windows are `winC*` - because the storey
- * cut belongs to the one block the page sells. */
-const IS_TOWER = /^A_|^win[AB]_|^loggia_(frame|glass|rail|shell)_f\d/;
+/* BOTH blocks, by the names the real-plan build gives their envelopes:
+ * every piece of block A starts `A_` and every piece of block B - the wing
+ * included - `B_` (CONTRACT.md, "Exterior node names"). One level is one
+ * floor plate across the whole L - the two blocks share the corridor - so
+ * opening a level takes the storeys over it off both of them at once.
+ * The podium, the terrace and the city are not caught and never cut. (The
+ * old build's names - `winA_`, `loggia_*_f` - only ever caught block A,
+ * because the storey cut then belonged to the one block the page sold.) */
+const IS_TOWER = /^[AB]_/;
 /* `?tower=0` leaves the block in `main`, where it was before the storey cut
  * - the A/B for what pulling it into its own clipping group costs the street
  * shot in draw calls and in pixels. With it off, clicking a floor opens the
  * top one, because there is nothing left to take the storeys away. */
 const TOWER = __q.get( 'tower' ) !== '0';
 
+/* The street's stand-in door leaves (CONTRACT "Street doors"): welded on
+ * their own so the walk can take them away once the hall's own leaf is on
+ * screen - two draws, materials the street already has. */
+const IS_STREET_LEAF = /^podium_door_.+_leaf/;
+/* MEASUREMENT ONLY: `?streetsplit=0` batches the street exactly as before the
+ * walk (no leaf group, loggia panes welded in with the rest of the glass) -
+ * the A/B for "the exterior render must not get worse". A walk on it keeps
+ * the street's panes and stand-in leaves. */
+const STREET_SPLIT = __q.get( 'streetsplit' ) !== '0';
+/* ...and the punched windows' panes with them: the street's glass is a
+ * mirror with nothing behind it, and from inside a room it was a blue slab in
+ * the wall. A storey being walked has them swapped for clear panes. */
+const IS_LG_GLASS = /^[AB]_(L\d\d)_(?:lg|wn|sl)\d+_(?:glass|lit)$/;
+const IS_WN_GLASS = /^[AB]_L\d\d_(?:wn|sl)\d+_(?:glass|lit)$/;
+const wnSrc = new Map();              // 'L03' -> the window panes' geometries, for the clear ones
+const wnClear = new Map();            // 'L03' -> that storey's clear panes
+let wnMat = null;
+const lgAll = [];                     // the street's loggia panes, every storey, one mesh a material
+const lgSrc = new Map();              // 'L03' -> material -> the panes' own geometries
+const lgGlass = new Map();            // 'L03' -> that storey's panes, welded the first time a walk asks
+/* Walking: the panes of every storey but the ones on screen. The first time,
+ * each storey's panes are welded from the kept sources (a few milliseconds);
+ * from then on it is visibility only. `null` puts the street's one mesh back. */
+function lgSplit( hide ) {
+	if ( ! lgAll.length ) return false;
+	if ( hide && ! lgGlass.size ) for ( const [ lv, byM ] of lgSrc ) {
+		const ms = [];
+		for ( const [ mat, geos ] of byM ) {
+			let g = null;
+			try { g = BufferGeometryUtils.mergeGeometries( geos, false ); } catch ( e ) { g = null; }
+			if ( ! g ) continue;
+			const mesh = new THREE.Mesh( g, mat );
+			mesh.name = 'loggia_glass_' + lv;
+			mesh.castShadow = mesh.receiveShadow = true;
+			mesh.frustumCulled = false;
+			mesh.visible = false;
+			groups.tower.add( mesh );
+			ms.push( mesh );
+		}
+		lgGlass.set( lv, ms );
+		const src = wnSrc.get( lv ), base = sceneMaterials && sceneMaterials.int_glass;
+		if ( src && src.length && base ) {
+			if ( ! wnMat ) { wnMat = base.clone(); wnMat.name = 'int_glass'; }
+			let g = null;
+			try { g = BufferGeometryUtils.mergeGeometries( src, false ); } catch ( e ) { g = null; }
+			if ( g ) {
+				const mesh = new THREE.Mesh( g, wnMat );
+				mesh.name = 'window_clear_' + lv;
+				mesh.frustumCulled = false;
+				mesh.visible = false;
+				groups.tower.add( mesh );
+				wnClear.set( lv, mesh );
+			}
+		}
+	}
+	let changed = false;
+	const all = ! hide;
+	for ( const m of lgAll ) if ( m.visible !== all ) { m.visible = all; changed = true; }
+	for ( const [ lv, ms ] of lgGlass ) {
+		const on = !! hide && ! hide.has( lv );
+		for ( const m of ms ) if ( m.visible !== on ) { m.visible = on; changed = true; }
+	}
+	for ( const [ lv, m ] of wnClear ) {
+		const on = !! hide && hide.has( lv );
+		if ( m.visible !== on ) { m.visible = on; changed = true; }
+	}
+	return changed;
+}
+function lgLevelOf( o ) {
+	for ( let n = o; n; n = n.parent ) { const m = IS_LG_GLASS.exec( n.name || '' ); if ( m ) return m[ 1 ]; }
+	return null;
+}
 function groupOf( o ) {
+	if ( STREET_SPLIT ) for ( let n = o; n; n = n.parent ) if ( IS_STREET_LEAF.test( n.name || '' ) ) return 'leaf';
 	for ( let n = o; n; n = n.parent ) {
 		if ( /__cut\d*$/.test( n.name ) ) return 'cut';
 		if ( /^flat/.test( n.name ) ) return 'flat';
@@ -1725,6 +1864,9 @@ function groupOf( o ) {
  *
  * Nothing in here creates a group or measures the scene; `optimise` keeps
  * both, because they are the parts that may only happen once. */
+const TREE_TILE = + ( __q.get( 'treetile' ) ?? 50 );   // tree tile, metres (0: whole)
+const HOOD_TILE_X = + ( __q.get( 'hoodtile' ) ?? 2.4 );  // a neighbours' tile, in tree tiles
+const IS_TILED = /^(foliage|foliage_b|bark|hood_.*)$/;
 function batchInto( root, only ) {
 	const byGeo = new Map();
 	// In developer mode every piece of the flat stays its own object so it can
@@ -1793,15 +1935,46 @@ function batchInto( root, only ) {
 	 * stands beside, a leaf could never be turned without taking its own
 	 * doorframe round with it. See `doorRig`. */
 	const byMat = new Map();
+	/* The trees and the neighbours are welded in TILES of the plan, not one
+	 * mesh a material: 50 m squares for the trees, 120 m for the neighbours
+	 * (a fifth of the triangles, spread over 800 m), each tile culled by
+	 * its bounding sphere. One mesh for the whole city meant every pass - the
+	 * walk's shadow redraw on every moving frame above all - submitted every
+	 * crown and every neighbour, almost all of it outside the cascade box or
+	 * behind the camera. Same material, same attributes: more draws, no new
+	 * pipeline. `?treetile=0` welds them whole, as before. */
+	const tileOf = new Map();
+	if ( TREE_TILE ) {
+		const box = new THREE.Box3(), c = new THREE.Vector3();
+		for ( const [ g, m ] of leftovers ) {
+			const n = m.material.name || '';
+			if ( g !== 'main' || ! IS_TILED.test( n ) ) continue;
+			m.updateWorldMatrix( true, false );
+			if ( ! m.geometry.boundingBox ) m.geometry.computeBoundingBox();
+			box.copy( m.geometry.boundingBox ).applyMatrix4( m.matrixWorld ).getCenter( c );
+			const cell = /^hood_/.test( n ) ? TREE_TILE * HOOD_TILE_X : TREE_TILE;
+			tileOf.set( m, Math.floor( c.x / cell ) + ',' + Math.floor( c.z / cell ) );
+		}
+	}
 	leftovers.forEach( ( [ g, m ] ) => {
 		const sw = doorSwingOf( planPieceName( m ) );
-		const k = g + '|' + m.material.uuid + ( sw ? '|swing' : '' );
+		/* A loggia's glass (`<B>_<LEVEL>_lg<NNN>_glass|lit`) is welded on
+		 * its own: the interior glazes the loggia door with a leaf of its
+		 * own, so a visitor walking a storey has the street's panes taken
+		 * out of that storey and walks through the open door (CONTRACT
+		 * "Interior <-> exterior seam" (d)). One more draw per material on
+		 * the street, no new pipeline - the same material, the same group;
+		 * the per-storey meshes a walk needs are welded only when a walk
+		 * first asks (`lgSplit`), from the sources kept here. */
+		const lg = g === 'tower' && STREET_SPLIT ? lgLevelOf( m ) : null;
+		const tile = tileOf.get( m ) || null;
+		const k = g + '|' + m.material.uuid + ( sw ? '|swing' : '' ) + ( lg ? '|lg' : '' ) + ( tile ? '|t' + tile : '' );
 		if ( ! byMat.has( k ) )
-			byMat.set( k, { g, mat: m.material, swing: !! sw, list: [], keys: [] } );
+			byMat.set( k, { g, mat: m.material, swing: !! sw, list: [], keys: [], lg, tile } );
 		byMat.get( k ).list.push( m );
 		byMat.get( k ).keys.push( sw );
 	} );
-	for ( const { g, mat, list, swing, keys } of byMat.values() ) {
+	for ( const { g, mat, list, swing, keys, lg, tile } of byMat.values() ) {
 		// A downloaded model carries texture coordinates, and the weld below
 		// strips every attribute but position and normal - so anything with a
 		// map stays its own draw call instead of being merged.
@@ -1849,15 +2022,32 @@ function batchInto( root, only ) {
 		if ( merged ) {
 			const mesh = new THREE.Mesh( merged, mat );
 			mesh.castShadow = mesh.receiveShadow = true;
-			mesh.frustumCulled = false;
+			mesh.frustumCulled = !! tile;
+			if ( tile ) { merged.computeBoundingSphere(); mesh.name = 'tile_' + mat.name + '_' + tile; }
 			groups[ g ].add( mesh );
 			if ( swing ) doorStash( mesh, mat, geos, keys );
+			if ( lg ) {
+				mesh.name = 'loggia_glass';
+				lgAll.push( mesh );
+				list.forEach( ( m, i ) => {
+					const lv = lgLevelOf( m );
+					if ( ! lgSrc.has( lv ) ) lgSrc.set( lv, new Map() );
+					const byM = lgSrc.get( lv );
+					if ( ! byM.has( mat ) ) byM.set( mat, [] );
+					byM.get( mat ).push( geos[ i ] );
+					if ( IS_WN_GLASS.test( m.name || '' ) || ( m.parent && IS_WN_GLASS.test( m.parent.name || '' ) ) ) {
+						if ( ! wnSrc.has( lv ) ) wnSrc.set( lv, [] );
+						wnSrc.get( lv ).push( geos[ i ] );
+					}
+				} );
+			}
 		} else {
 			list.forEach( m => groups[ g ].add( m ) );
 		}
 		// ...the swinging halves keep theirs: the rig re-welds them, four
-		// doors of one flat at a time, round their own hinges
-		geos.forEach( g => { if ( merged && ! swing ) g.dispose(); } );
+		// doors of one flat at a time, round their own hinges - and so do
+		// the loggias' panes, for `lgSplit`
+		geos.forEach( g => { if ( merged && ! swing && ! lg ) g.dispose(); } );
 	}
 }
 
@@ -1880,6 +2070,16 @@ function optimise( root ) {
 	 * storey cut as well as to their own: nested clipping groups union their
 	 * planes and a fragment either plane drops is gone. */
 	groups.tower.add( groups.cut );
+	/* The real building's interiors, one group per resident level, all
+	 * under one more clipping plane: `lvPlane` cuts the open level at the
+	 * plan's section height. It rests at 1e4 like the others, and it is a
+	 * plane from the start so an interior's pipelines are built clipped
+	 * once and never rebuilt when the cut moves. */
+	lvRoot = new THREE.ClippingGroup();
+	lvRoot.name = 'group_levels';
+	lvRoot.clippingPlanes = [ lvPlane ];
+	lvRoot.clipShadows = true;
+	scene.add( lvRoot );
 	batchInto( root );
 	// the sweep runs from just above the roof to just below the flat's slab
 	const bb = new THREE.Box3().setFromObject( groups.cut );
@@ -2620,7 +2820,9 @@ function floorUnder( px = floorPointer ) {
  * whole thing is one ray against nine quads rather than against the merged
  * millions of the street. */
 function floorTest() {
-	if ( ! floorPointer || ! floorMap || sceneNo !== 1 || ! flyAllowed )
+	// the real building's storeys: see `lvBandTest`
+	if ( FLAT_GONE ) return lvBandTest();
+	if ( FLAT_GONE || ! floorPointer || ! floorMap || sceneNo !== 1 || ! flyAllowed )
 		return setHotFloor( 0 );
 	const dom = renderer.domElement;
 	/* The wall does not part until the flat can be drawn - a pipeline that
@@ -2870,6 +3072,2302 @@ function floorApply() {
 	}
 }
 
+/* ===================================================== the real levels
+ * Everything the page used to do with the one invented show flat, done
+ * with the architect's building: driven by scene_meta.json (the frame, the
+ * levels, the facades) and plan_meta.json (per level the flats, their
+ * polygons, label points and rooms), with not one plan number typed here.
+ * levels.js knows the data and the drawing; this is the state machine.
+ *
+ *   street    the storey under the pointer lights across the WHOLE L - one
+ *             level is one floor plate, the two blocks share the corridor -
+ *             and the page names it ("Floor 5 of 9 · 23 flats"). A click
+ *             opens that level.
+ *   level     ('plan', scene 2) everything of both blocks over the level's
+ *             section height is taken off by `towerPlane`, the level's own
+ *             interior is cut at the same height by `lvPlane` and capped in
+ *             ink, and the camera comes over the whole plate. The storey is
+ *             DRAWN: ink walls, amber floors, one badge per flat with its
+ *             real number and area; the flat under the pointer comes back
+ *             as modelled.
+ *   flat      a click on one, or the page's "See it in 3D", or #flat-37:
+ *             the camera comes down onto it and its rooms carry dots.
+ *   room      a dot puts the camera in the room at eye height, the clip
+ *             lifted so the walls and ceiling are whole. Walking is the
+ *             walk module's: see `LVL.hooks`.
+ *
+ * THE GATE. An interior is a download (web/interior/<LEVEL>.glb) and its
+ * pipelines are a compile, and NOTHING of a level is put on screen before
+ * both are done: `lvWith` is the one way in, and `P.state === 'in'` means
+ * "the geometry is HERE and its pipelines are built", never "it has been
+ * asked for" - the difference is the whole of the bug the split shipped
+ * (memory: web-page-performance). The hover only lights a band on the
+ * facade, which needs nothing loaded; the click waits on the gate with the
+ * cursor saying so, and a hover that dwells has usually paid it already.
+ * -------------------------------------------------------------------- */
+/* The plan's section height over a level's floor, in metres: the walls are
+ * cut here, which is above every sill (0.90) and below every head (2.10 and
+ * 2.40), so a door reads as a gap and a window as a thinner wall. */
+const LV_CUT = + ( __q.get( 'cut' ) ?? 1.45 );
+/* How many levels are kept parsed at once: the one that is open and the one
+ * it was left for. Anything further back is disposed and fetched again if a
+ * visitor comes back to it - it is ~90 KB on the wire. */
+const LV_RESIDENT = 2;
+/* The lit storey's amber, at full, and how long it takes to light. */
+const LV_BAND = + ( __q.get( 'band' ) ?? 0.36 );
+const LV_BAND_OPEN = 0.30;
+/* How long the pointer has to rest on one storey before that level is
+ * fetched and compiled in the background - long enough that sweeping the
+ * pointer up the facade does not fetch nine levels, short enough that the
+ * level is usually in before the click. */
+const LV_DWELL = 260;
+/* The eye's field of view standing in a room. */
+const LV_ROOM_FOV = 62;
+/* MEASUREMENT ONLY: `?lvgate=0` takes the gate away - a click opens the
+ * level as soon as the plan's numbers are in, whether its interior has
+ * arrived or not. It exists so tools/flatwindow.cjs can be shown to FAIL
+ * against the bug it guards; nothing else may use it. */
+const LV_GATE = __q.get( 'lvgate' ) !== '0';
+
+let frameP = null;                                  // plan metres <-> world
+const lvPlane = new THREE.Plane( new THREE.Vector3( 0, - 1, 0 ), 1e4 );
+let lvRoot = null;                                  // every resident interior, clipped
+const lvParts = new Map();                          // 'L05' | 'cores' -> part
+const lvMats = new Map();                           // the interior's own material copies
+let lvCapMat = null;
+let lvPM = null;                                    // plan_meta.json, once it is in
+let lvLite = null;                                  // rooms_lite.json, once it is in
+let lvOpen = null;          // the level scene 2 is open on
+let lvFocusK = 0;           // the open flat's place in its level, 0 for none
+let lvHotK = 0;             // ...and the one under the pointer
+let lvRooms = [];           // the open flat's rooms (levels.js `roomsOf`)
+let lvAsk = 0;              // only the latest open request acts
+let lvWaiting = null;       // the level a click is waiting on, for the cursor
+let lvWarm = Promise.resolve();   // one part's pipelines at a time
+const lvWarmed = new Set();       // ...and the materials already compiled
+const lvRev = new Float32Array( LVL.MAX_UNITS ), lvRevT = new Float32Array( LVL.MAX_UNITS );
+let lvAmt = 0, lvDim = 0, lvInside = false;
+
+const lvLevel = ( id ) => ( id && LVL.levelById( id ) ) || null;
+const lvMetaLevel = ( id ) => ( ( meta && meta.levels ) || [] ).find( l => l.id === id ) || null;
+/* The old scene numbered STOREYS, the podium terrace being 2's floor; the
+ * real ids keep that count: storey n is `L0n`. Only the legacy `setScene`
+ * and `LP.floor` still speak storeys. */
+const lvStorey = ( id ) => { const m = /^L(\d\d)$/.exec( id || '' ); return m ? + m[ 1 ] : 0; };
+const lvOfStorey = ( n ) => 'L' + String( n | 0 ).padStart( 2, '0' );
+const lvUnit = ( k ) => { const L = lvLevel( lvOpen ); return ( L && k > 0 && L.units[ k - 1 ] ) || null; };
+
+/* The interior's own copy of a material, patched to be drawn. Copies, so
+ * the floor view's drawing can never reach the street: the lift cars are
+ * `metal_dark`, which the street's poles are made of too. A copy shares the
+ * whole node graph, so it IS the same surface until the drawing turns. */
+function lvMat( name ) {
+	if ( lvMats.has( name ) ) return lvMats.get( name );
+	const base = sceneMaterials && sceneMaterials[ name ];
+	let m = null;
+	if ( base ) {
+		m = base.clone();
+		m.name = name;
+		if ( PLAN2D ) LVL.patchDrawing( m, { ink: PLAN_INK, amber: PLAN_AMBER, lit: PLAN_LIT, gain: PLAN_GAIN } );
+	}
+	lvMats.set( name, m );
+	return m;
+}
+/* The section cap's ink: unlit, so it is the same black whatever the sun is
+ * doing to the roof around it, and it stands back with the rest of the
+ * storey while one flat is open. */
+function lvCapMaterial() {
+	if ( lvCapMat ) return lvCapMat;
+	const m = new THREE.MeshBasicNodeMaterial();
+	m.name = 'level_cap';
+	m.colorNode = PLAN_INK.mul( LVL.LVU.dim.oneMinus() );
+	lvCapMat = m;
+	return m;
+}
+
+/* The interior's floors carry the scanned parquet and tiles. A map that has
+ * not landed is a 1x1 default under the same pipeline, so this is a
+ * download and never a reason to wait. */
+let lvMapsAsked = false;
+function lvMaps() {
+	if ( lvMapsAsked || ! maps ) return;
+	lvMapsAsked = true;
+	for ( const [ k, t ] of Object.entries( maps ) )
+		if ( /^(parquet|btile|bfloor|planks)/.test( k ) && t && t.userData && t.userData.file ) fillMap( t );
+}
+
+let lvPrewarmed = null;
+function lvPrewarm() {
+	if ( lvPrewarmed ) return lvPrewarmed;
+	lvPrewarmed = Promise.all( [ lvPart( 'L06' ), lvPart( 'cores' ) ] )
+		.then( ( [ P ] ) => lvFurn( P ) ).catch( () => null );
+	return lvPrewarmed;
+}
+/* One part: fetched, parsed through the street's own loader (Draco), welded
+ * by levels.js into one mesh per material with each vertex's flat baked in,
+ * capped, put in the scene hidden, and compiled through the gate. Resolves
+ * once ALL of that is done - the promise is the gate. */
+function lvPart( name ) {
+	let P = lvParts.get( name );
+	if ( P ) { P.usedAt = performance.now(); return P.ready; }
+	P = { name, state: 'loading', group: null, cap: null, doors: [], tris: 0, usedAt: performance.now() };
+	lvParts.set( name, P );
+	lvMaps();
+	P.ready = ( async () => {
+		const t0 = performance.now();
+		const [ buf, pm ] = await Promise.all( [ LVL.fetchPart( name ), LVL.planMeta() ] );
+		lvPM = pm;
+		const tGot = performance.now();
+		const level = name === 'cores' ? null : LVL.levelById( name );
+		const gltf = await new Promise( ( res, rej ) => glbLoader.parse( buf, './', res, rej ) );
+		const holder = new THREE.Group();
+		holder.matrixAutoUpdate = false;
+		holder.matrix.copy( frameP.matrix );
+		holder.add( gltf.scene );
+		const { meshes, doors, tris, lift } = LVL.weldPart( holder, level, lvMat,
+			( miss ) => console.warn( 'unmapped materials in interior/' + name + ':', miss ) );
+		/* Leaves, cars and landing doors: welded while at rest, hung on
+		 * their hinges / in their shafts by the walk (levels.js makeMovers). */
+		const g0 = new THREE.Group();
+		gltf.scene.traverse( ( o ) => { if ( o.geometry ) o.geometry.dispose(); } );
+		const g = g0;
+		g.name = 'level_' + name;
+		g.visible = false;
+		for ( const m of meshes ) { m.frustumCulled = false; g.add( m ); }
+		P.movers = LVL.makeMovers( g, doors );
+		// the lifts' own doors, displays and call lamps (`liftKit`)
+		if ( name === 'cores' ) P.lifts = liftKit( g, lift, pm );
+		if ( level ) {
+			/* A hair UNDER the cut, inside the clipped group: the walls are
+			 * cut at exactly LV_CUT, so the cap fills each hollow wall head
+			 * from just below its rim, and nothing ever stands over it. */
+			const cap = new THREE.Mesh( LVL.capGeometry( level, frameP, level.z + LV_CUT - 0.004 ),
+				lvCapMaterial() );
+			cap.name = 'level_cap_' + name;
+			cap.castShadow = false;
+			cap.receiveShadow = false;
+			cap.frustumCulled = false;
+			g.add( cap );
+			P.cap = cap;
+		}
+		lvRoot.add( g );
+		Object.assign( P, { group: g, doors, tris, level } );
+		const tBuilt = performance.now();
+		await lvCompile( P );
+		P.state = 'in';
+		console.info( 'interior ' + name + ': ' + Math.round( tGot - t0 ) + ' ms to fetch, '
+			+ Math.round( tBuilt - tGot ) + ' ms to parse and weld, '
+			+ Math.round( performance.now() - tBuilt ) + ' ms to compile; '
+			+ meshes.length + ' meshes, ' + Math.round( tris ) + ' triangles, '
+			+ doors.length + ' moving parts stashed' );
+		lvEvict();
+		return P;
+	} )();
+	P.ready.catch( ( e ) => {
+		console.warn( 'interior ' + name + ' did not load:', e );
+		if ( lvParts.get( name ) === P ) lvParts.delete( name );
+	} );
+	return P.ready;
+}
+
+/* Through the existing gate: `compileInto` holds the frame loop off while a
+ * pass compiles (a compile borrows the renderer), and parts queue behind one
+ * another here so no two compiles ever overlap. The WHOLE clipped root is
+ * what is compiled, not the meshes: a compile walks from the object it is
+ * given, and only from the ClippingGroup down does an object know it is
+ * clipped - compiled on their own the meshes would build the pipelines of an
+ * UNclipped draw, and the real one would compile again in the frame. The
+ * other resident levels are hidden, so only this one is walked. The
+ * materials are shared by every level, so from the second level on there is
+ * usually nothing left to build. */
+/* ON A WALK a level's first arrival is not compiled through that gate. A
+ * held loop is a frozen picture - 0.5-0.7 s for the cores and L00 on the
+ * walk up to a street door (measured), the body standing still in it - and
+ * on a walk the level can simply be put on screen to build: with
+ * `pipesGather` on, three asks for its pipelines through the async call and
+ * draws nothing of it until they stand (`Pipelines.isReady`), so the frames
+ * go on and the level turns up a moment later where it belongs. Its section
+ * cap (an ink slab at the floor view's cut) is kept out of it, and the
+ * level is hidden again once built, for the walk's own gate (`bwReady`) to
+ * show. `?bwasync=0` keeps the held compile, for an A/B. */
+const BW_ASYNC = __q.get( 'bwasync' ) !== '0';
+function lvWarmWalk( P, show, hide, mats, warmed ) {
+	const job = lvWarm.then( async () => {
+		const key = warmed === lvWarmed ? ( m ) => m : ( m ) => m.uuid;
+		if ( [ ...mats ].every( m => warmed.has( key( m ) ) ) ) return;
+		pipesGather();
+		P.warming = true;
+		show();
+		shadowDirty();
+		const r0 = __perf.rendered || 0;
+		// two drawn frames: the beauty pass and the pre-pass both ask
+		for ( let i = 0; i < 240 && ( __perf.rendered || 0 ) < r0 + 2; i ++ ) { invalidate( 2 ); await nextFrame(); }
+		try { await pipesSettled(); } finally { P.warming = false; hide(); }
+		shadowDirty();
+		invalidate( 2 );
+		for ( const m of mats ) warmed.add( key( m ) );
+	} );
+	lvWarm = job.catch( () => {} );
+	return job;
+}
+function lvCompile( P ) {
+	if ( bwOn && BW_ASYNC && PIPES ) {
+		const mats = new Set( P.group.children.filter( o => o.isMesh && o !== P.cap ).map( o => o.material ) );
+		let capWas = false;
+		return lvWarmWalk( P, () => { if ( P.cap ) { capWas = P.cap.visible; P.cap.visible = false; } P.group.visible = true; },
+			() => { if ( P.state !== 'in' ) P.group.visible = false; if ( P.cap ) P.cap.visible = capWas; }, mats, lvWarmed );
+	}
+	const job = lvWarm.then( async () => {
+		const mats = new Set( P.group.children.filter( o => o.isMesh ).map( o => o.material ) );
+		if ( [ ...mats ].every( m => lvWarmed.has( m ) ) ) return;
+		await compileInto( prePass, [ lvRoot ], P.group );
+		await compileInto( scenePass, [ lvRoot ], P.group );
+		for ( const m of mats ) lvWarmed.add( m );
+	} );
+	lvWarm = job.catch( () => {} );
+	return job;
+}
+
+/* At most LV_RESIDENT levels parsed: the least recently wanted goes first,
+ * and never the one on screen. The cores stay - they are every level's. */
+function lvEvict() {
+	const lv = [ ...lvParts.values() ].filter( P => P.name !== 'cores' && P.state === 'in' );
+	lv.sort( ( a, b ) => a.usedAt - b.usedAt );
+	/* Walking, what the body needs now and the storeys either side of it
+	 * are kept: a visitor turning back down a stair finds the level they
+	 * have just left still here. */
+	const keep = new Set( bwOn && bwS ? bwS.needLevels : [] );
+	if ( bwOn && bwS && /^L\d\d$/.test( bwS.level ) ) for ( const d of [ - 1, 1 ] ) keep.add( lvOfStorey( lvStorey( bwS.level ) + d ) );
+	while ( lv.length > ( bwOn ? BW_RESIDENT : LV_RESIDENT ) ) {
+		const i = lv.findIndex( P => P.name !== lvOpen && ! P.group.visible && ! keep.has( P.name ) );
+		if ( i < 0 ) break;
+		const P = lv.splice( i, 1 )[ 0 ];
+		lvParts.delete( P.name );
+		P.state = 'gone';
+		P.group.removeFromParent();
+		/* three's render objects - and the node builder state each holds,
+		 * a quarter of a gigabyte a level - are let go on the OBJECT's
+		 * dispose (or the material's, which every level shares); disposing a
+		 * geometry does not do it. */
+		P.group.traverse( ( o ) => { if ( o.isMesh ) o.dispatchEvent( { type: 'dispose' } ); if ( o.geometry ) o.geometry.dispose(); } );
+		if ( P.movers ) P.movers.dispose(); else for ( const d of P.doors ) d.geo.dispose();
+		if ( P.furn ) P.furn.dispose();
+	}
+}
+
+/* The one way onto a level: the part, the cores and the room facts, then
+ * `then` - and only for the LATEST ask, so a visitor who clicks the fifth
+ * storey and then the eighth while the fifth is still downloading ends up
+ * on the eighth, once. */
+function lvWith( id, then ) {
+	const ask = ++ lvAsk;
+	lvWaiting = id;
+	embedCursor( false );
+	if ( ! LV_GATE ) {
+		lvPart( id ).catch( () => {} ); lvPart( 'cores' ).catch( () => {} );
+		return LVL.planMeta().then( ( pm ) => { lvPM = pm; lvWaiting = null; then(); return true; } );
+	}
+	return Promise.all( [ lvPart( id ), lvPart( 'cores' ),
+		LVL.roomsLite().then( ( r ) => { lvLite = r; } ) ] ).then( () => {
+		if ( ask !== lvAsk ) return false;
+		lvWaiting = null;
+		embedCursor( false );
+		then();
+		return true;
+	}, ( e ) => {
+		console.warn( 'level ' + id + ' could not be opened:', e );
+		if ( ask === lvAsk ) { lvWaiting = null; embedCursor( false ); }
+		return false;
+	} );
+}
+
+/* Show or hide one level's interior and the cores with it. */
+function lvShow( id, on ) {
+	const P = lvParts.get( id );
+	if ( P && P.group && P.group.visible !== on ) {
+		P.group.visible = on;
+		P.usedAt = performance.now();
+		LVL.hooks.fire( on ? 'onLevelShown' : 'onLevelHidden', id, P.group );
+	}
+	const C = lvParts.get( 'cores' );
+	if ( C && C.group ) C.group.visible = on || [ ...lvParts.values() ]
+		.some( Q => Q !== P && Q.name !== 'cores' && Q.group && Q.group.visible );
+	shadowDirty();
+	invalidate();
+}
+
+/* ------------------------------------------------- the street's storeys */
+let lvPick = null;                       // invisible quads the pointer is tested against
+const lvSlots = [ { level: null, open: 0, want: 0, grp: null, mat: null },
+	{ level: null, open: 0, want: 0, grp: null, mat: null } ];
+let lvHotLevel = null, lvHoverAt = 0, lvFetched = null;
+
+function lvBuildBands() {
+	if ( ! frameP || ! meta || ! meta.facades ) return;
+	const up = new THREE.Vector3( 0, 1, 0 );
+	/* One face line of the L as a quad, 8 cm proud of it, from y0 up h. */
+	const quad = ( f, y0, h ) => {
+		const a = frameP.world( f.a[ 0 ] + f.out[ 0 ] * 0.08, f.a[ 1 ] + f.out[ 1 ] * 0.08, 0 );
+		const b = frameP.world( f.b[ 0 ] + f.out[ 0 ] * 0.08, f.b[ 1 ] + f.out[ 1 ] * 0.08, 0 );
+		const len = a.distanceTo( b );
+		const dir = b.clone().sub( a ).normalize();
+		const g = new THREE.PlaneGeometry( len, h );
+		g.applyMatrix4( new THREE.Matrix4().makeBasis( dir, up, new THREE.Vector3().crossVectors( dir, up ) )
+			.setPosition( a.clone().add( b ).multiplyScalar( 0.5 ).setY( y0 + h * 0.5 ) ) );
+		return g;
+	};
+	const pickMat = new THREE.MeshBasicMaterial( { side: THREE.DoubleSide } );
+	lvPick = new THREE.Group();
+	lvPick.name = 'level_pick';
+	for ( const q of LVL.bandQuads( meta ) ) {
+		const m = new THREE.Mesh( quad( q, q.z, q.h ), pickMat );
+		m.visible = false;                 // hit tested, never drawn
+		m.userData.level = q.level;
+		lvPick.add( m );
+	}
+	scene.add( lvPick );
+	/* What lights: per slot, every face line at a unit height, carried to
+	 * the level by its own position and scale. One material a slot - the
+	 * same two-slot pattern the old storey used, so the storey being left
+	 * fades out while the next one comes up, in the same frames. */
+	const one = BufferGeometryUtils.mergeGeometries( meta.facades.map( f => quad( f, 0, 1 ) ) );
+	for ( const s of lvSlots ) {
+		s.mat = new THREE.MeshBasicNodeMaterial( { color: FLOOR_AMBER, transparent: true,
+			opacity: 0, depthWrite: false, side: THREE.DoubleSide } );
+		s.mat.name = 'level_band';
+		const mesh = new THREE.Mesh( one, s.mat );
+		mesh.renderOrder = 3;
+		mesh.frustumCulled = false;
+		mesh.castShadow = mesh.receiveShadow = false;
+		s.grp = new THREE.Group();
+		s.grp.name = 'level_band';
+		s.grp.add( mesh );
+		s.grp.visible = false;
+		scene.add( s.grp );
+	}
+}
+
+/* The bands' pipelines ride in the boot's warm frame, at zero opacity, so
+ * the first storey to light is not the first draw of its material. */
+function lvWarmBands() {
+	const was = lvSlots.map( s => s.grp && s.grp.visible );
+	for ( const s of lvSlots ) if ( s.grp ) s.grp.visible = true;
+	return () => lvSlots.forEach( ( s, i ) => { if ( s.grp ) s.grp.visible = was[ i ]; } );
+}
+
+function lvBandUnder( px = floorPointer ) {
+	if ( ! px || ! lvPick ) return null;
+	const r = renderer.domElement.getBoundingClientRect();
+	_fndc.set( ( px[ 0 ] - r.left ) / r.width * 2 - 1, - ( ( px[ 1 ] - r.top ) / r.height ) * 2 + 1 );
+	_fray.setFromCamera( _fndc, camera );
+	const hit = _fray.intersectObjects( lvPick.children, false )[ 0 ];
+	return hit ? hit.object.userData.level : null;
+}
+
+/* The storey under the pointer, on the street. Nothing has to be loaded for
+ * this - it is a band of light on the facade - so it answers from the first
+ * frame; the level itself is fetched once the pointer has rested on it. */
+function lvBandTest() {
+	if ( ! floorPointer || ! lvPick || sceneNo !== 1 || ! flyAllowed || tweens.length ) {
+		bwHotSet( null );
+		return lvSetHot( null );
+	}
+	// a street door under the pointer is a way in, and no storey is lit
+	const door = bwDoorUnder( floorPointer );
+	bwHotSet( door );
+	lvSetHot( door ? null : lvBandUnder() );
+}
+
+function lvFloorDetail( id ) {
+	const ml = lvMetaLevel( id ), L = lvLevel( id );
+	return { level: id || null, floor: ml && ml.res ? ml.res : 0,
+		flats: L ? L.units.filter( u => ! u.office ).length : undefined,
+		offices: L ? L.units.filter( u => u.office ).length : undefined };
+}
+
+function lvSetHot( id ) {
+	if ( id === lvHotLevel ) return;
+	lvHotLevel = id;
+	lvHoverAt = performance.now();
+	embedCursor( false );
+	const open = lvSlots.find( s => s.level && s.want > 0 );
+	if ( ! ( open && open.level === id ) ) {
+		if ( open ) open.want = 0;                      // this one starts going out
+		const L = lvMetaLevel( id );
+		if ( L ) {
+			const free = lvSlots.find( s => s !== open ) || lvSlots[ 0 ];
+			free.level = id;
+			free.grp.position.y = L.z;
+			free.grp.scale.y = L.h;
+			free.grp.visible = true;
+			free.want = 1;
+		}
+	}
+	announce( 'floor', lvFloorDetail( id ) );
+	invalidate();
+}
+
+/* The two dials, off the frame loop rather than the tween list (a tween in
+ * flight pauses the rail). Returns whether anything moved - see `frame`. */
+function lvBandStep( dt ) {
+	let moved = false;
+	for ( const s of lvSlots ) {
+		if ( s.open === s.want ) continue;
+		const d = dt / LV_BAND_OPEN;
+		s.open = s.want > s.open ? Math.min( s.want, s.open + d ) : Math.max( s.want, s.open - d );
+		s.mat.opacity = LV_BAND * s.open * s.open;
+		if ( s.open === 0 ) { s.grp.visible = false; s.level = null; }
+		moved = true;
+	}
+	/* A pointer that has rested on a storey is a visitor about to click it:
+	 * the level is fetched and compiled now, behind the light. */
+	if ( lvHotLevel && lvHotLevel !== lvFetched && performance.now() - lvHoverAt > LV_DWELL ) {
+		lvFetched = lvHotLevel;
+		lvPart( lvHotLevel ).then( ( P ) => lvFurn( P ) ).catch( () => {} );
+		lvPart( 'cores' ).catch( () => {} );
+	}
+	if ( moved ) invalidate( SETTLE );
+	return moved;
+}
+
+function lvBandsReset() {
+	lvHotLevel = null;
+	for ( const s of lvSlots ) {
+		s.open = s.want = 0; s.level = null;
+		if ( s.grp ) s.grp.visible = false;
+		if ( s.mat ) s.mat.opacity = 0;
+	}
+}
+
+/* ------------------------------------------------- opening a level */
+function lvOpenLevel( id, flatN = null ) {
+	if ( bwOn ) bwExit( 'none' );
+	const ml = lvMetaLevel( id );
+	if ( ! frameP || ! ml || ! ( ml.h > 0 ) || ml.kind === 'parking' ) return false;
+	lvWith( id, () => lvEnter( id, flatN ) );
+	return true;
+}
+
+/* A flat by its own number ('37', '47-a'). Its level comes from plan_meta,
+ * which may still be on its way - the answer is true as long as the number
+ * can be a flat at all, and the page is told through `lp:planfocus` when it
+ * is actually open. */
+function lvOpenFlat( n ) {
+	if ( n == null || ! frameP ) return false;
+	if ( LVL.planReady() && ! LVL.flatByN( n ) ) return false;
+	LVL.planMeta().then( ( pm ) => {
+		lvPM = pm;
+		const u = LVL.flatByN( n );
+		if ( u ) lvOpenLevel( u.level, u.n );
+	}, () => {} );
+	return true;
+}
+
+/* Which flat the page's "tour" should open when nobody has chosen one: the
+ * one open now, or else the top floor's largest flat with a loggia -
+ * read off the plan, so it is a real flat whatever the build renumbers. */
+function lvShowFlat() {
+	const u = lvUnit( lvFocusK );
+	if ( u && ! u.office ) return u.n;
+	if ( ! lvPM ) return null;
+	const top = [ ...( lvPM.levels || [] ) ].reverse().find( L => ( L.flats || [] ).length );
+	if ( ! top ) return null;
+	const pick = [ ...top.flats ].sort( ( a, b ) =>
+		( ( b.loggias || [] ).length ? 1 : 0 ) - ( ( a.loggias || [] ).length ? 1 : 0 )
+		|| ( ( b.area && b.area.total ) || 0 ) - ( ( a.area && a.area.total ) || 0 ) )[ 0 ];
+	return pick ? pick.n : null;
+}
+
+function lvEnter( id, flatN = null ) {
+	const L = lvLevel( id ), P = lvParts.get( id );
+	if ( ! L || ( LV_GATE && ( ! P || P.state !== 'in' ) ) ) return;
+	if ( sceneNo === 2 && lvOpen === id && ! sceneSettling ) {
+		if ( flatN != null ) lvFocus( L.units.find( u => ! u.office && String( u.n ) === String( flatN ) ) || null );
+		return;
+	}
+	const fromStreet = sceneNo !== 2;
+	const was = lvOpen;
+	sceneSettling = true;
+	try {
+		lvBandsReset();
+		tweens.length = 0;
+		sceneNo = 2;
+		scene2View = 'plan';
+		planStepReset();
+		if ( fromStreet ) setPlanUp();
+		lvOpen = id;
+		lvFocusK = 0; lvHotK = 0; lvRooms = [];
+		lvRev.fill( 0 ); lvRevT.fill( 0 );
+		for ( let k = 0; k < LVL.MAX_UNITS; k ++ ) LVL.LVU.rev.array[ k ] = 0;
+		lvInsideSet( false );
+		if ( was && was !== id ) lvShow( was, false );
+		lvShow( id, true );
+		if ( P && P.cap ) P.cap.visible = true;     // a plan is capped (a walk may have left it off)
+		lvFurn( P );
+		if ( P && P.furn ) lvFurnSync( P );
+		lvPlane.constant = L.z + LV_CUT;
+		planHold = fromStreet ? PLAN_HOLD : 0;
+		const u = flatN != null ? L.units.find( x => ! x.office && String( x.n ) === String( flatN ) ) : null;
+		if ( u ) { lvFocusK = lvHotK = u.k; lvRooms = LVL.roomsOf( u, lvLite ); }
+		announce( 'scene', { scene: 2, view: 'plan', level: id, floor: lvStorey( id ) } );
+		$( 's_1' ).setAttribute( 'aria-pressed', 'false' );
+		$( 's_2' ).setAttribute( 'aria-pressed', 'true' );
+		$( 'sub' ).textContent = 'Level ' + id + ' · floor ' + ( ( lvMetaLevel( id ) || {} ).res || '-' );
+		lvFocusTell( true );
+		lvRoomTell( true );
+		announcePlan();
+		/* The shadow map is about to be redrawn with this level in it for the
+		 * first time, and its depth pipelines are the one thing the compile
+		 * gate did not build. They are asked for side by side here, through
+		 * the same hook the boot uses, so no frame waits on one. */
+		if ( PIPES ) { pipesGather(); pipesSettled(); }
+		controls.enabled = false;
+		fly.enabled = EMBED;
+		mode = 'hero';
+		setCompare( false );
+		if ( towerPlane.constant > towerTop ) towerPlane.constant = towerTop;
+		animateSlice( towerPlane, L.z + LV_CUT, FLOOR_IN, 0 );
+		const pose = u ? lvFocusPose() : planPose();
+		if ( ! fromStreet ) { pose.lift = 0; pose.ease = easeInOut; }
+		flyCamera( pose, fromStreet && ! u ? FLOOR_IN : FOCUS_DUR + 400, 0, () => setMode( 'hero' ) );
+		shadowDirty();
+		invalidate();
+	} finally { sceneSettling = false; flyApply(); }
+	lvBadgeTell( true );
+}
+
+/* Back to the street: the building closes over the level the way it opened,
+ * and the level goes away behind it - it stays parsed, so coming back to it
+ * costs nothing. */
+function lvLeave( animate = true ) {
+	const id = lvOpen;
+	sceneSettling = true;
+	try {
+		tweens.length = 0;
+		sceneNo = 1;
+		lvFocusK = 0; lvHotK = 0; lvRooms = [];
+		roomFocus = - 1;
+		lvInsideSet( false );
+		announce( 'scene', { scene: 1, floor: 0, view: 'street' } );
+		$( 's_1' ).setAttribute( 'aria-pressed', 'true' );
+		$( 's_2' ).setAttribute( 'aria-pressed', 'false' );
+		$( 'sub' ).textContent = 'Street · the solved shot';
+		lvBadgeTell( true );
+		lvFocusTell();
+		lvRoomTell();
+		lvRoomDotTell();
+		const done = () => {
+			towerPlane.constant = 1e4;
+			if ( lvOpen === id && sceneNo === 1 ) {
+				lvShow( id, false );
+				lvOpen = null;
+				lvPlane.constant = 1e4;
+			}
+			shadowDirty();
+			invalidate();
+		};
+		if ( ! animate ) { done(); setMode( 'hero' ); return; }
+		controls.enabled = false;
+		fly.enabled = EMBED;
+		mode = 'hero';
+		animateSlice( towerPlane, towerTop, FLOOR_IN, 0, done );
+		const back = heroPose();
+		back.lift = 0;
+		back.ease = easeInOut;
+		flyCamera( back, FLOOR_IN, 0, () => setMode( 'hero', true ) );
+		invalidate();
+	} finally { sceneSettling = false; flyApply(); }
+}
+
+/* `setScene` as the rest of the file and the old page still call it. Scene
+ * 2 is a level now: a storey number opens that level, no storey opens the
+ * show flat's. */
+function lvSetScene( n, animate, floor, view ) {
+	if ( bwOn ) { if ( n !== 2 ) return bwExit( 'street' ); bwExit( 'none' ); }
+	if ( n === 2 ) {
+		if ( view === 'plan' && floor ) return lvOpenLevel( lvOfStorey( floor ) );
+		const want = lvShowFlat();
+		if ( want ) return lvOpenFlat( want );
+		LVL.planMeta().then( ( pm ) => { lvPM = pm; const w = lvShowFlat(); if ( w ) lvOpenFlat( w ); }, () => {} );
+		return true;
+	}
+	if ( sceneNo === 2 ) return lvLeave( animate );
+	return null;           // already in the street: the old path settles it
+}
+
+/* The plate's own box in plan metres for `planFrame`: the level's extent,
+ * standing on its floor. The WHOLE L is fitted to the clear part of the
+ * window - one level is one plate, and a plate run off the right is half a
+ * floor plan. */
+function lvFrameBox() {
+	const L = lvLevel( lvOpen );
+	if ( ! L || ! frameP ) return null;
+	if ( ! L.box ) L.box = LVL.levelBox( L );
+	const o = frameP.o.clone();
+	o.y += L.z;
+	return { o, ex: frameP.ex, ey: frameP.ey, x0: L.box.x0, x1: L.box.x1, y0: L.box.y0, y1: L.box.y1,
+		fitClear: true };
+}
+function lvCenter() {
+	const B = lvFrameBox();
+	if ( ! B ) return siteCenter();
+	return B.o.clone().addScaledVector( B.ex, ( B.x0 + B.x1 ) / 2 ).addScaledVector( B.ey, ( B.y0 + B.y1 ) / 2 );
+}
+
+/* The floor view's shot, whichever of its three it is on. */
+function lvShot() {
+	if ( bwOn ) return bwPlace( bwS );
+	if ( ! lvOpen ) return;
+	if ( roomFocus >= 0 ) return lvRoomShot();
+	applyPose( lvFocusK ? lvFocusPose() : planPose() );
+}
+
+/* ------------------------------------------------- the drawing's dials */
+const lvDrawOwns = () => PLAN2D && sceneNo === 2 && scene2View === 'plan' && !! lvOpen;
+let lvPinK = 0;
+/* For the rigs: hold flat `k` of the open level at dial `t` (k 0 lets go). */
+window.__lvPin = ( k, t = 1 ) => {
+	lvPinK = k | 0;
+	if ( lvPinK ) { lvRev[ lvPinK ] = lvRevT[ lvPinK ] = t; LVL.LVU.rev.array[ lvPinK ] = t; lvHotK = lvPinK; }
+	else { lvHotK = 0; }
+	invalidate( SETTLE );
+	return { k: lvPinK, rev: lvRev[ lvPinK ] };
+};
+function lvRevealStep( dt ) {
+	if ( lvPinK ) return false;              // held still for a measurement
+	const live = lvDrawOwns() && ! lvInside;
+	if ( live && planHold > 0 ) planHold = Math.max( 0, planHold - dt );
+	let moved = false;
+	const want = ( live && planHold <= 0 ) ? 1 : 0;
+	if ( lvAmt !== want ) {
+		const d = dt / ( want ? PLAN_DRAIN : PLAN_FILL );
+		lvAmt = want > lvAmt ? Math.min( 1, lvAmt + d ) : Math.max( 0, lvAmt - d );
+		LVL.LVU.amt.value = lvAmt;
+		moved = true;
+	}
+	const L = lvLevel( lvOpen );
+	const N = L ? Math.min( L.units.length, LVL.MAX_UNITS - 1 ) : 0;
+	for ( let k = 1; k <= N; k ++ ) {
+		const w = ( lvDrawOwns() && ( k === lvHotK || k === lvFocusK ) ) ? 1 : 0;
+		if ( lvRevT[ k ] === w ) continue;
+		const d = dt / ( w ? PLAN_IN : PLAN_OUT );
+		lvRevT[ k ] = w > lvRevT[ k ] ? Math.min( 1, lvRevT[ k ] + d ) : Math.max( 0, lvRevT[ k ] - d );
+		lvRev[ k ] = easeInOut( lvRevT[ k ] );
+		LVL.LVU.rev.array[ k ] = lvRev[ k ];
+		/* The furniture's cue: the kits grow their pieces off this dial -
+		 * the level's own furniture here (`lvFurn`), and anyone else's off
+		 * the hook. The sun's map is drawn again once a flat has arrived or
+		 * gone, not on every frame of it. */
+		const FP = lvParts.get( lvOpen );
+		if ( FP && FP.furn ) {
+			FP.furn.reveal( L.units[ k - 1 ].token, lvRev[ k ] );
+			if ( lvRevT[ k ] === w ) shadowDirty();
+		}
+		LVL.hooks.fire( 'onFlatReveal', lvOpen, L.units[ k - 1 ].n, lvRev[ k ] );
+		moved = true;
+	}
+	const wantDim = ( lvDrawOwns() && lvFocusK ) ? PLAN_DIM : 0;
+	if ( lvDim !== wantDim ) {
+		const d = dt / PLAN_DIM_T;
+		lvDim = wantDim > lvDim ? Math.min( wantDim, lvDim + d ) : Math.max( wantDim, lvDim - d );
+		LVL.LVU.dim.value = lvDim;
+		moved = true;
+	}
+	if ( ! moved ) return false;
+	LVL.LVU.seed.value = ( LVL.LVU.seed.value + 0.6180339887 ) % 1.0;
+	lvBadgeTell();
+	invalidate( SETTLE );
+	return true;
+}
+
+/* Which flat is under the pointer in the floor view: a ray to the plane
+ * 1.1 m over the level's floor and a point-in-polygon on the flats' own
+ * polygons and their loggias - any shape, up to all of them. */
+const _lvhit = new THREE.Vector3();
+function lvUnitUnder( px ) {
+	const L = lvLevel( lvOpen );
+	if ( ! px || ! L ) return 0;
+	const r = renderer.domElement.getBoundingClientRect();
+	_plndc.set( ( px[ 0 ] - r.left ) / r.width * 2 - 1, - ( ( px[ 1 ] - r.top ) / r.height ) * 2 + 1 );
+	_plray.setFromCamera( _plndc, camera );
+	_plplane.set( _plplane.normal.set( 0, 1, 0 ), - ( L.z + 1.1 ) );
+	if ( ! _plray.ray.intersectPlane( _plplane, _lvhit ) ) return 0;
+	const [ x, y ] = frameP.plan( _lvhit );
+	for ( const u of L.units )
+		if ( LVL.inPoly( u.poly, x, y ) || ( u.loggias || [] ).some( p => LVL.inPoly( p, x, y ) ) ) return u.k;
+	return 0;
+}
+function lvHoverTest() {
+	if ( ! lvDrawOwns() || lvFocusK || roomFocus >= 0 ) return;
+	const k = lvUnitUnder( floorPointer );
+	if ( k === lvHotK ) return;
+	lvHotK = k;
+	if ( renderer && EMBED ) renderer.domElement.style.cursor = k ? 'pointer' : 'grab';
+	invalidate( 2 );
+}
+
+/* ------------------------------------------------- the badges
+ * One per flat at its own label point (plan_meta `label_at`), carrying the
+ * flat's number and its total area - the page draws them. And the three
+ * entrances, at their cores, which the page names. */
+const _lvq = new THREE.Vector3();
+let lvBadgeSaid = '';
+function lvBadgeTell( force = false ) {
+	if ( ! lvDrawOwns() ) {
+		if ( lvBadgeSaid === '' && ! force ) return;
+		lvBadgeSaid = '';
+		announce( 'planbadge', { badges: [], entrances: [], on: false } );
+		return;
+	}
+	const L = lvLevel( lvOpen );
+	if ( ! L ) return;
+	const r = renderer.domElement.getBoundingClientRect();
+	const at = ( x, y, z ) => {
+		frameP.world( x, y, z, _lvq ).project( camera );
+		return [ Math.round( ( _lvq.x * 0.5 + 0.5 ) * r.width + r.left ),
+			Math.round( ( - _lvq.y * 0.5 + 0.5 ) * r.height + r.top ), _lvq.z < 1 ];
+	};
+	const show = lvAmt > 0.5 && ! lvFocusK;
+	const out = L.units.map( ( u ) => {
+		/* In the middle of the flat, as the architect's sheets letter them -
+		 * the flat's own pole, not `label_at`: plan_meta's label point sits
+		 * by the flat's entrance, and on a double-loaded bar the two rows'
+		 * entrance labels are 4 m apart and their badges collide over the
+		 * corridor. `label_at` is the fallback. */
+		if ( ! u.mid ) u.mid = u.poly ? LVL.poleOf( u.poly ) : u.label_at;
+		const p = u.mid || u.label_at;
+		const [ x, y, front ] = at( p[ 0 ], p[ 1 ], L.z + 1.2 );
+		return { x, y, on: ( show && front && u.k !== lvHotK ) ? 1 : 0,
+			n: u.office ? null : u.n, office: u.office ? u.n : null,
+			area: u.area ? u.area.total : null, level: L.id,
+			poly: L.id + '-' + ( u.office ? 'o' : 'u' ) + u.n };
+	} );
+	// the residents' three cores; the podium's own stair is not an entrance
+	const ent = ( ( lvPM && lvPM.cores ) || [] ).map( ( c, i ) => {
+		if ( ! c.hall || ! /^C\d+$/.test( c.id ) ) return null;
+		if ( ! c.at ) c.at = LVL.poleOf( c.hall );
+		const [ x, y, front ] = at( c.at[ 0 ], c.at[ 1 ], L.z + 1.2 );
+		return { x, y, core: c.id, k: + ( /\d+/.exec( c.id ) || [ i + 1 ] )[ 0 ], on: ( show && front ) ? 1 : 0 };
+	} ).filter( Boolean );
+	const key = out.map( p => p.x + ',' + p.y + ',' + p.on ).join( ';' ) + '|'
+		+ ent.map( p => p.x + ',' + p.y + ',' + p.on ).join( ';' );
+	if ( ! force && key === lvBadgeSaid ) return;
+	lvBadgeSaid = key;
+	announce( 'planbadge', { badges: out, entrances: ent, on: true, level: L.id } );
+}
+
+/* ------------------------------------------------- one flat */
+function lvFocusBox( u ) {
+	return LVL.bboxOf( [ u.poly, ...( u.loggias || [] ) ] );
+}
+function lvFocusPose() {
+	const L = lvLevel( lvOpen ), u = lvUnit( lvFocusK );
+	if ( ! L || ! u ) return planPose();
+	return planFocusPose( - 1, { box: lvFocusBox( u ), F: planFrame(),
+		head: ( L.clear || L.h - 0.3 ) - 0.2 } );
+}
+/* Open one flat (a unit record of the open level), or close it with null. */
+function lvFocus( u, animate = true ) {
+	if ( ! lvDrawOwns() ) return;
+	const k = u ? u.k : 0;
+	if ( k === lvFocusK && roomFocus < 0 ) return;
+	planKillTween();
+	planDrag = null;
+	planVel = 0;
+	roomFocus = - 1;
+	roomSaid = - 2;
+	lvInsideSet( false );
+	lvFocusK = k;
+	if ( k ) lvHotK = k;
+	else { lvHotK = 0; floorDirty = true; }
+	lvRooms = u ? LVL.roomsOf( u, lvLite ) : [];
+	// the walk's engine, so a room's stance can be checked against its walls (`lvRoomLook`)
+	if ( u && ! bwW ) bwEngine().catch( () => {} );
+	lvRoomTell();
+	lvFocusTell();
+	announcePlan();
+	const pose = k ? lvFocusPose() : planPose();
+	if ( animate ) planFocusFly( pose );
+	else { applyPose( pose ); setMode( 'hero' ); }
+	lvBadgeTell( true );
+	invalidate();
+}
+let lvFocusSaid = '~';
+function lvFocusTell( force = false ) {
+	const u = ( sceneNo === 2 && lvOpen ) ? lvUnit( lvFocusK ) : null;
+	const key = u ? lvOpen + '/' + u.k : '';
+	if ( ! force && key === lvFocusSaid ) return;
+	lvFocusSaid = key;
+	const was = sceneSettling;
+	sceneSettling = true;
+	try {
+		announce( 'planfocus', { n: u && ! u.office ? u.n : null, office: u && u.office ? u.n : null,
+			level: lvOpen, unit: u ? u.k : - 1, floor: lvStorey( lvOpen ),
+			poly: u ? lvOpen + '-' + ( u.office ? 'o' : 'u' ) + u.n : null } );
+	} finally { sceneSettling = was; }
+}
+
+/* ------------------------------------------------- its rooms */
+const lvRoomOwns = () => lvDrawOwns() && lvFocusK > 0 && roomFocus >= 0;
+function lvRoomPose( i ) {
+	const L = lvLevel( lvOpen ), R = lvRooms[ i ];
+	if ( ! L || ! R ) return lvFocusPose();
+	const p = frameP.world( R.eye[ 0 ], R.eye[ 1 ], L.z + ( R.eye[ 2 ] ?? 1.6 ) );
+	const look = lvRoomLook( R );
+	const t = frameP.world( look[ 0 ], look[ 1 ], L.z + ( look[ 2 ] ?? 1.2 ) );
+	const tmp = new THREE.PerspectiveCamera( LV_ROOM_FOV, frameAspect(), 0.1, 4000 );
+	tmp.position.copy( p );
+	tmp.up.set( 0, 1, 0 );
+	tmp.lookAt( t );
+	return { p, q: tmp.quaternion.clone(), fov: LV_ROOM_FOV, shift: 0, target: t };
+}
+/* Where a room's stance looks. The stance rooms.json gives is kept - unless,
+ * read off the walk's own collision field, it faces a wall within 1.2 m
+ * (build 3: a few of them stood a visitor nose to a partition). Then the
+ * eye turns down the longest free line across the room from the same spot
+ * (walk.js `sight`). The engine is made when a flat opens, so it is
+ * normally there by the time a dot is clicked; if not, the stance stands. */
+const LV_FACE_MIN = 1.2;
+function lvRoomLook( R ) {
+	if ( ! bwW || ! lvOpen || ! R.eye || ! R.look ) return R.look;
+	if ( R.lookFixed ) return R.lookFixed;
+	const h = Math.atan2( R.look[ 1 ] - R.eye[ 1 ], R.look[ 0 ] - R.eye[ 0 ] );
+	let S = null;
+	try { S = bwW.sight( lvOpen, R.eye[ 0 ], R.eye[ 1 ], h ); } catch ( e ) { S = null; }
+	if ( ! S ) return R.look;
+	R.lookFixed = S.free >= LV_FACE_MIN ? R.look
+		: [ R.eye[ 0 ] + Math.cos( S.best ) * 3, R.eye[ 1 ] + Math.sin( S.best ) * 3, R.look[ 2 ] ?? 1.2 ];
+	return R.lookFixed;
+}
+function lvRoomShot( aim = false ) {
+	if ( roomFocus < 0 || ! lvFocusK ) return;
+	const P = lvRoomPose( roomFocus );
+	if ( ! aim ) P.q = camera.quaternion.clone();
+	applyPose( P );
+	if ( fly ) fly.sync();
+}
+function lvRoomSet( i, animate = true ) {
+	if ( ! lvDrawOwns() || ! lvFocusK ) return;
+	const n = ( i != null && i >= 0 && i < lvRooms.length ) ? i | 0 : - 1;
+	if ( n === roomFocus ) return;
+	const inside = roomFocus >= 0;
+	roomFocus = n;
+	lvRoomTell();
+	lvRoomDotTell();
+	LVL.hooks.fire( 'onRoom', lvOpen, ( lvUnit( lvFocusK ) || {} ).n, n >= 0 ? lvRooms[ n ] : null );
+	const to = n >= 0 ? lvRoomPose( n ) : lvFocusPose();
+	const lift = ( inside && n >= 0 ) ? null : n >= 0 ? 'in' : 'out';
+	/* Coming out, the plan comes back at once rather than when the camera
+	 * passes up through the ceiling: the last thing the flight out may do is
+	 * arrive at a plan with a lid on it. */
+	if ( n < 0 ) lvInsideSet( false );
+	if ( animate ) roomFly( to, lift ? ROOM_DUR : ROOM_STEP, lift );
+	else { applyPose( to ); setMode( 'hero' ); if ( fly ) fly.sync(); lvInsideStep(); }
+	shadowDirty();
+	invalidate();
+}
+function lvRoomTell( force = false ) {
+	const i = lvRoomOwns() ? roomFocus : - 1;
+	if ( ! force && i === roomSaid ) return;
+	roomSaid = i;
+	const R = i >= 0 ? lvRooms[ i ] : null;
+	const was = sceneSettling;
+	sceneSettling = true;
+	try {
+		announce( 'room', { room: i, key: R ? R.kind : null, name: R ? R.name : null,
+			ka: R ? R.ka : null, count: lvRooms.length, unit: lvFocusK, level: lvOpen,
+			n: ( lvUnit( lvFocusK ) || {} ).n || null } );
+	} finally { sceneSettling = was; }
+}
+let lvDotSaid = '';
+function lvRoomDotTell( force = false ) {
+	const L = lvLevel( lvOpen );
+	const live = lvDrawOwns() && lvFocusK > 0 && roomFocus < 0 && lvRooms.length && L;
+	if ( ! live ) {
+		if ( lvDotSaid === '' && ! force ) return;
+		lvDotSaid = '';
+		announce( 'roomdot', { dots: [], on: false } );
+		return;
+	}
+	const r = renderer.domElement.getBoundingClientRect();
+	const out = lvRooms.map( ( R ) => {
+		frameP.world( R.label[ 0 ], R.label[ 1 ], L.z + 1.2, _lvq ).project( camera );
+		return { i: R.i, name: R.name, ka: R.ka, key: R.kind,
+			x: Math.round( ( _lvq.x * 0.5 + 0.5 ) * r.width + r.left ),
+			y: Math.round( ( - _lvq.y * 0.5 + 0.5 ) * r.height + r.top ),
+			on: _lvq.z < 1 ? 1 : 0 };
+	} );
+	const key = out.map( p => p.x + ',' + p.y + ',' + p.on ).join( ';' );
+	if ( ! force && key === lvDotSaid ) return;
+	lvDotSaid = key;
+	announce( 'roomdot', { dots: out, on: true } );
+}
+
+/* Under its own ceiling the camera wants the room WHOLE: the clip lifted,
+ * the cap gone, and the storeys over it back, or the walls stop at 1.45 m
+ * and the sky shows over them. Checked on the frame, so it changes as the
+ * dive passes down through the ceiling, edge on, where nobody sees it. */
+function lvInsideStep() {
+	/* Walking, the walk owns the cut (none) - except on the dive down into a
+	 * flat from the floor view, which lifts it as it passes the ceiling. */
+	if ( bwOn && ( bwFrom === 'street' || ! tweens.length ) ) return;
+	const L = lvLevel( lvOpen );
+	lvInsideSet( !! L && sceneNo === 2 && ( roomFocus >= 0 || bwOn )
+		&& camera.position.y < L.z + ( L.clear || L.h - 0.3 ) - 0.02 );
+}
+function lvInsideSet( want ) {
+	if ( want === lvInside ) return;
+	lvInside = want;
+	const L = lvLevel( lvOpen );
+	lvPlane.constant = ( want || ! L ) ? 1e4 : L.z + LV_CUT;
+	if ( L && sceneNo === 2 ) towerPlane.constant = want ? 1e4 : L.z + LV_CUT;
+	const P = lvParts.get( lvOpen );
+	if ( P && P.cap ) P.cap.visible = ! want;
+	roomShadow( want );
+	shadowDirty();
+	invalidate( 2 );
+}
+
+/* What other modules may ask of the scene - see `LVL.hooks`. */
+LVL.hooks.shown = () => ( sceneNo === 2 ? lvOpen : null );
+LVL.hooks.groupOf = ( id ) => { const P = lvParts.get( id ); return ( P && P.state === 'in' ) ? P.group : null; };
+LVL.hooks.doorsOf = ( id ) => { const P = lvParts.get( id ); return P ? P.doors : []; };
+
+/* window.LP, the real-building half. Installed over the old members of the
+ * same names, so the page's existing calls land here. */
+function lvInstallApi( LP ) {
+	Object.defineProperties( LP, Object.getOwnPropertyDescriptors( {
+		openLevel: ( id ) => lvOpenLevel( String( id ) ),
+		openFlat: ( n ) => lvOpenFlat( n ),
+		closeFlat: () => {
+			if ( bwOn ) return bwExit( 'plan' );
+			if ( roomFocus >= 0 ) lvRoomSet( - 1, false );
+			if ( lvFocusK ) lvFocus( null );
+		},
+		get showFlat() { return lvShowFlat(); },
+		levelOf: ( n ) => { const u = LVL.flatByN( n ); return u ? u.level : null; },
+		get level() { return sceneNo === 2 ? lvOpen : null; },
+		get flat() { const u = lvUnit( lvFocusK ); return u && ! u.office ? u.n : null; },
+		get floor() { return lvOpen ? lvStorey( lvOpen ) : topFloor(); },
+		setScene: ( n, floor, view ) => setScene( n, true, floor || topFloor(), view || 'hero' ),
+		get planSteps() { return 0; },
+		get planFocus() { return lvFocusK ? lvFocusK : - 1; },
+		planFocusTo: ( i ) => { if ( i == null || i < 0 ) lvFocus( null ); else lvFocus( lvUnit( i | 0 ) ); },
+		get room() { return lvRoomOwns() ? roomFocus : - 1; },
+		get rooms() { return lvRooms.map( R => ( { i: R.i, key: R.kind, name: R.name, ka: R.ka } ) ); },
+		roomTo: ( i ) => {
+			// out of a room on foot is out to the flat it is in
+			if ( bwOn && ( i == null || i < 0 ) ) return bwExit( 'plan' );
+			if ( bwOn ) bwExit( 'none' );
+			return lvRoomSet( i == null ? - 1 : i | 0 );
+		},
+		roomBy: ( d ) => {
+			if ( roomFocus < 0 || ! lvRooms.length ) return;
+			lvRoomSet( ( roomFocus + ( d | 0 ) + lvRooms.length * 2 ) % lvRooms.length );
+		},
+		/* On foot (see "walking the building"): `walk( {portal: 'C1'} )`,
+		 * `walk( {flat: '37'} )`, `walk( {flat, room} )`, `walk( {level, at:
+		 * [x, y], heading} )`; `entrance( k )` is portal C<k>; `walkExit(
+		 * 'street' | 'plan' )`; `liftGo( level )` in a car; `walkMap` takes
+		 * the canvas the minimap is drawn into. */
+		walk: ( spec ) => {
+			if ( ! spec ) return false;
+			if ( spec.flat != null && spec.room == null && ! spec.at ) return bwWalkFlat( spec.flat );
+			return bwWalk( spec, { from: spec.portal ? 'street' : 'level' } );
+		},
+		entrance: ( k ) => bwWalk( { portal: /^\d$/.test( String( k ) ) ? 'C' + k : String( k ) }, { from: 'street' } ),
+		walkExit: ( to ) => bwExit( to || null ),
+		liftGo: ( level ) => !! ( bwOn && bwW && bwW.liftGo( level ) && ( invalidate( 2 ), true ) ),
+		get walking() { return bwOn; },
+		get walkState() { return bwOn ? bwS : null; },
+		set walkMap( c ) { bwMapEl = c || null; bwMapCache.clear(); bwMapDraw(); },
+		get walkMap() { return bwMapEl; },
+	} ) );
+	return LP;
+}
+/* For the rigs: where on the screen a storey's band is - face line `f` of
+ * meta.facades, `t` along it, half way up level `id` - or null off screen. */
+window.__lvBandAt = ( id, f, t = 0.5 ) => {
+	const L = lvMetaLevel( id ), F = meta && meta.facades && meta.facades[ f ];
+	if ( ! L || ! F || ! frameP ) return null;
+	const x = F.a[ 0 ] + ( F.b[ 0 ] - F.a[ 0 ] ) * t + F.out[ 0 ] * 0.1;
+	const y = F.a[ 1 ] + ( F.b[ 1 ] - F.a[ 1 ] ) * t + F.out[ 1 ] * 0.1;
+	const v = frameP.world( x, y, L.z + L.h * 0.5 ).project( camera );
+	const r = renderer.domElement.getBoundingClientRect();
+	if ( v.z > 1 || Math.abs( v.x ) > 0.98 || Math.abs( v.y ) > 0.98 ) return null;
+	return [ Math.round( ( v.x * 0.5 + 0.5 ) * r.width + r.left ), Math.round( ( - v.y * 0.5 + 0.5 ) * r.height + r.top ) ];
+};
+/* For the rigs: the walk's engine and its state, and a way to drive it a
+ * fixed step at a time with given input (`__bw.step( n, input )`), so a
+ * headless tour walks the same body the keys do. */
+window.__bw = {
+	get on() { return bwOn; }, get s() { return bwS; }, get W() { return bwW; },
+	get shown() { return [ ...bwShown ]; },
+	ready: ( id ) => bwHere( id ),
+	/* What the tour rig asks every frame: is the body standing (or on a
+	 * flight, or at an open car door) on a storey that is not on screen? */
+	hole() {
+		if ( ! bwOn || ! bwS ) return null;
+		const s = bwS, miss = [];
+		const C = lvParts.get( 'cores' );
+		if ( s.surface !== 'street' && ! ( C && C.group && C.group.visible ) ) miss.push( 'cores' );
+		const riding = !! ( s.inLift && s.inLift.riding );
+		if ( s.surface !== 'street' && s.level !== 'ROOF' && ! bwShown.has( s.level ) ) miss.push( s.level );
+		// a car sees its shaft, which is the walls of the storeys it passes
+		if ( riding ) for ( const id of s.needLevels ) if ( id !== 'ROOF' && ! bwShown.has( id ) && Math.abs( ( lvMetaLevel( id ) || { z: 1e9 } ).z - s.pos.plan[ 2 ] ) < 3.4 ) miss.push( id + '(shaft)' );
+		if ( s.onStair ) for ( const id of s.seesLevels || s.needLevels ) if ( id !== 'ROOF' && ! bwShown.has( id ) ) miss.push( id );
+		for ( const l of s.lifts ) if ( l.doorOpen > 0 && l.level && l.level !== 'ROOF' && Math.abs( l.z - s.pos.plan[ 2 ] ) < 1.5
+			&& ! bwShown.has( l.level ) ) miss.push( l.level + '(lift door)' );
+		return miss.length ? [ ...new Set( miss ) ] : null;
+	},
+	step( n, input = {}, dt = 1 / 60 ) {
+		if ( ! bwOn || ! bwW ) return null;
+		// the look is a turn made once, not once a step
+		const rest = input.look ? Object.assign( {}, input, { look: null } ) : input;
+		for ( let i = 0; i < n; i ++ ) { bwS = bwW.step( dt, i ? rest : input ); bwApply( bwS, false ); }
+		bwApply( bwS, true ); bwTell(); bwMapDraw();
+		if ( fly ) { fly.sync(); bwLookAt = fly.look; }
+		invalidate( 4 );
+		const s = bwS;
+		if ( s.surface !== 'street' ) bwBeenIn = true;
+		else if ( bwOutside( s ) > ( bwBeenIn ? BW_OUT : BW_OUT_UNVISITED ) ) bwExit( 'street' );
+		return s;
+	},
+	parts: () => [ ...lvParts.values() ].map( P => ( { name: P.name, state: P.state, shown: !! ( P.group && P.group.visible ),
+		furn: P.furnState || null, out: P.movers ? P.movers.out.size : 0, standing: P.furn ? P.furn.standing() : null } ) ),
+	near: () => camera.near, leaf: () => !! ( groups.leaf && groups.leaf.visible ),
+	cut: () => ( { lv: lvPlane.constant, tower: towerPlane.constant } ),
+};
+/* For the rigs and the console: what is resident, what it cost. */
+window.__lv = () => ( {
+	open: lvOpen, scene: sceneNo, focus: ( lvUnit( lvFocusK ) || {} ).n || null, hot: lvHotK,
+	hotLevel: lvHotLevel, waiting: lvWaiting, amt: + lvAmt.toFixed( 3 ), inside: lvInside,
+	room: roomFocus, rooms: lvRooms.map( R => R.name ),
+	parts: [ ...lvParts.values() ].map( P => ( { name: P.name, state: P.state, shown: !! ( P.group && P.group.visible ),
+		meshes: P.group ? P.group.children.length : 0, tris: Math.round( P.tris ) } ) ),
+	bytes: LVL.partBytes(),
+	shownMeshes: lvOpen && lvParts.get( lvOpen ) && lvParts.get( lvOpen ).group
+		? lvParts.get( lvOpen ).group.children.filter( o => o.isMesh && o.visible ).length : 0,
+	cut: lvPlane.constant, tower: towerPlane.constant, tweens: tweens.length, compiling,
+} );
+
+/* ================================================== walking the building
+ * A visitor on foot, anywhere in the architect's building: in through a
+ * street door, up the stairs or in a lift, along a corridor, into a flat
+ * and out onto its loggia - and back out to the street, in one go.
+ *
+ * The body is web/walk.js's (the engine: floors, stairs, lifts, doors,
+ * collision, the gait the owner approved in the old show flat). This is the
+ * host: it hands the engine the keys and the pointer, and it puts on the
+ * screen what the engine says is true - the levels the body can see, the
+ * leaves swung to the engine's angles, the cars in their shafts.
+ *
+ *   ways in   a room of an open flat (the room dots: landing in a room IS
+ *             walking); a street door - the three entrance doors and the
+ *             terrace stair's, clicked in the street, or the page's
+ *             "Entrance 1/2/3" - the camera walks up to it and hands over;
+ *             `LP.walk( {portal|flat|level, at, room} )`; #walk-C1,
+ *             #flat-37/walk.
+ *   the gate  the engine is asked, per level, whether its geometry is HERE
+ *             (`bwReady`: the level's interior welded and compiled, its
+ *             furniture in or known absent, the cores in), and it never
+ *             lets the body onto a surface of a level that is not - the
+ *             visitor waits at a shut door or a landing, or in a car with
+ *             its doors shut, and the level arrives while they do. The
+ *             engine's `needLevels` (the body's storey, and both ends of a
+ *             flight it is near) is what is fetched; a ride fetches only
+ *             where it is going.
+ *   inside    no cut: full-height walls and ceilings, both blocks' envelope
+ *             and the city kept (the windows look out onto the real street),
+ *             the levels in `needLevels` shown and the rest hidden, near
+ *             plane 0.10 (WALK.NEAR), the sun's shadow fitted to the room -
+ *             a flat's reach in a flat, further in a corridor or a stair.
+ *   render    on demand, as everywhere: the engine says `moving` and a frame
+ *             is owed; standing still, nothing is drawn.
+ *
+ * Rigs: tools/tourcheck.cjs (two tours through the real page),
+ * tools/walkcheck.cjs, tools/walkbuilding.cjs (the engine alone).
+ * -------------------------------------------------------------------- */
+const BW_FOV = LV_ROOM_FOV;
+/* The sun's reach under a ceiling: a flat is ~12 m across, a corridor and a
+ * stairwell are not - past the far plane nothing is shadowed and the sun
+ * would light a corridor's far end through its walls. */
+const BW_SHADOW_FLAT = 24, BW_SHADOW_COMMON = 60;
+/* How far onto the street a body walks before the walk hands back to the
+ * street's own shot. The doorstep reaches 2.7 m out (walk.js `apron`), so a
+ * body can stand 2.46 m out at most; a way in from the street stands it at
+ * 2.2. Out of the building it is 2.0 m - a step clear of the door - and
+ * from a body that has not been in yet, the very edge of the step. */
+const BW_OUT = 2.0, BW_OUT_UNVISITED = 2.4;
+let bwBeenIn = false;
+/* While walking, how many levels may stay parsed (the body's, a neighbour on
+ * a stair, a car's destination) before the least recently wanted goes. */
+const BW_RESIDENT = 4;
+
+let bwW = null, bwMaking = null;   // the engine, made once plan_meta is in
+let bwOn = false;                  // a visitor is walking
+let bwS = null;                    // the engine's last state
+let bwFrom = null;                 // 'street' | 'level' | 'room': where they came in
+let bwAsk = 0;
+let bwHot = null;                  // the street door under the pointer
+let bwPick = null;                 // its hit quads
+let bwLookAt = { yaw: 0, pitch: 0 };
+let bwTouch = null;                // a thumb on the left half of the window
+let bwShown = new Set();           // levels on screen while walking
+const bwOut = new Map();           // node -> level: leaves the engine has open
+let bwSaid = '', bwMapEl = null, bwMapLv = null, bwMapCache = new Map();
+let bwStreetLeaves = null;         // the street's stand-in leaves (scene_meta)
+let bwShadowFar = 0, bwSig = '';
+let bwEnded = 0;                   // performance.now() when the last walk ended
+const bwAhead = new Set();         // car+storey whose neighbours have been asked for
+
+/* The engine, once: it reads plan_meta and nothing else. */
+function bwEngine() {
+	if ( bwW ) return Promise.resolve( bwW );
+	if ( bwMaking ) return bwMaking;
+	bwMaking = LVL.planMeta().then( ( pm ) => {
+		lvPM = pm;
+		bwW = createWalker( { meta, planMeta: pm, worker: true,
+			toWorld: ( x, y, z ) => frameP.world( x, y, z, _bwv ).toArray(),
+			ready: bwReady, on: bwEvent } );
+		// solids for levels whose furniture is already in
+		for ( const P of lvParts.values() ) if ( P.furnSolids ) bwW.solids( P.name, P.furnSolids );
+		return bwW;
+	} );
+	bwMaking.catch( () => { bwMaking = null; } );
+	return bwMaking;
+}
+const _bwv = new THREE.Vector3();
+
+/* Is the geometry HERE: the level's interior welded and compiled, its
+ * furniture in (or known to have none), and the cores - every storey's
+ * stairs and lifts - in too. ROOF is the stair heads, in cores.glb. */
+const lvIn = ( id ) => { const P = lvParts.get( id ); return !! P && P.state === 'in'; };
+/* MEASUREMENT ONLY: `?bwgate=0` tells the engine every level is here, so
+ * tools/tourcheck.cjs can be shown to FAIL (a body on a storey that is not on
+ * screen) against the bug the gate guards. Nothing else may use it. */
+const BW_GATE = __q.get( 'bwgate' ) !== '0';
+function bwReady( id, why ) { return ! BW_GATE || bwHere( id, why ); }
+/* `why` 'shaft': a car going past only needs the storey's walls - its
+ * furniture is behind them. */
+function bwHere( id, why ) {
+	if ( ! lvIn( 'cores' ) ) return false;
+	if ( id === 'ROOF' ) return true;
+	const P = lvParts.get( id );
+	return !! P && P.state === 'in' && ( why === 'shaft' || P.furnState === 'in' || P.furnState === 'none' );
+}
+/* Ask for what the engine says it needs: each level and its furniture, and
+ * the cores. Nothing is SHOWN here - `bwApply` shows what is ready. */
+function bwWant( ids, furn = true ) {
+	lvPart( 'cores' ).catch( () => {} );
+	for ( const id of ids ) {
+		if ( id === 'ROOF' || id === 'P-1' ) continue;
+		const P = lvParts.get( id );
+		if ( P && P.state === 'in' ) { P.usedAt = performance.now(); if ( furn && ! P.furnReady ) lvFurn( P ); continue; }
+		lvPart( id ).then( ( Q ) => { if ( furn ) lvFurn( Q ); }, () => {} );
+	}
+}
+function bwAllReady( ids ) {
+	return ids.every( id => bwHere( id ) );
+}
+function bwUntilReady( ids, ask, ms = 30000 ) {
+	return new Promise( ( res ) => {
+		const t0 = performance.now();
+		const poll = () => {
+			if ( ask !== bwAsk ) return res( false );
+			if ( bwAllReady( ids ) ) return res( true );
+			if ( performance.now() - t0 > ms ) return res( false );
+			setTimeout( poll, 60 );
+		};
+		poll();
+	} );
+}
+
+/* The engine's events: the page hears about levels, flats, rooms, lifts. */
+function bwEvent( type, p ) {
+	if ( type === 'door' || type === 'arrive' ) invalidate( 2 );
+	if ( type === 'level' && bwOn ) { lvOpen = p.level === 'ROOF' ? lvOpen : p.level; bwTell( true ); }
+}
+
+/* ------------------------------------------------- the ways in
+ * `spec` is the engine's: {portal} | {flat[, room]} | {level, at, heading}.
+ * `how`: { from: 'street'|'level'|'room', fly: bool }. Resolves true once
+ * the visitor is walking. */
+async function bwWalk( spec, how = {} ) {
+	if ( ! frameP || ! meta ) return false;
+	const ask = ++ bwAsk;
+	let W;
+	try { W = await bwEngine(); } catch ( e ) { console.warn( 'walk: no plan', e ); return false; }
+	if ( ask !== bwAsk ) return false;
+	lvLite = lvLite || await LVL.roomsLite();
+	const s0 = W.enter( spec );
+	if ( ! s0 ) { console.warn( 'walk: nowhere to stand for', spec ); return false; }
+	/* A street door needs nothing loaded to stand outside it - the doorstep
+	 * is the street's - and the level behind it is fetched while the camera
+	 * walks up; the door stays shut until it is in. Anywhere else the body is
+	 * IN the building, so nothing is shown until its storey is here. */
+	const need = s0.needLevels.filter( id => id !== 'ROOF' );
+	if ( spec.portal && ! need.includes( 'L00' ) ) need.push( 'L00' );
+	bwWant( need );
+	lvWaiting = s0.level;
+	embedCursor( false );
+	if ( ! spec.portal ) {
+		const ok = await bwUntilReady( need, ask );
+		if ( ! ok || ask !== bwAsk ) { if ( ask === bwAsk ) { lvWaiting = null; embedCursor( false ); } return false; }
+		// the engine placed the body before its furniture was solid: again
+		const s1 = W.enter( spec );
+		if ( s1 ) Object.assign( s0, s1 );
+	}
+	lvWaiting = null;
+	bwStart( s0, how.from || ( spec.portal ? 'street' : 'level' ), how.fly !== false );
+	return true;
+}
+
+/* From an open flat's room: the camera has just landed on the room's stance,
+ * and from here on it is a body standing there. Nothing moves: the body is
+ * put where the camera is, looking where it looks. */
+async function bwFromRoom() {
+	if ( bwOn || roomFocus < 0 || ! lvFocusK || ! lvOpen ) return;
+	const L = lvLevel( lvOpen ), room = roomFocus, lv = lvOpen;
+	if ( ! L ) return;
+	/* The level is on screen; its furniture (which is solid) may not be
+	 * yet. The visitor is stood in the room either way - the keys come
+	 * alive once it is here. */
+	if ( ! bwHere( lv ) ) {
+		bwWant( [ lv ] );
+		const ask = bwAsk;
+		await bwUntilReady( [ lv ], ask, 20000 );
+		if ( bwOn || roomFocus !== room || lvOpen !== lv || tweens.length || ! bwHere( lv ) ) return;
+	}
+	const at = frameP.plan( camera.position );
+	camera.getWorldDirection( _bwv );
+	const d = frameP.plan( _bwv.add( camera.position ) );
+	const heading = Math.atan2( d[ 1 ] - at[ 1 ], d[ 0 ] - at[ 0 ] );
+	const pitch = Math.asin( Math.max( - 1, Math.min( 1, d[ 2 ] - at[ 2 ] ) ) );
+	bwEngine().then( ( W ) => {
+		if ( bwOn || roomFocus !== room || lvOpen !== lv ) return;
+		const s = W.enter( { level: lvOpen, at: [ at[ 0 ], at[ 1 ] ], heading, z: L.z } );
+		if ( ! s ) return;
+		W.step( 0, { look: { yaw: 0, pitch } } );
+		bwStart( W.state(), 'room', false );
+	} );
+}
+
+/* The walk begins: the scene becomes the walk's, and the camera either is
+ * already where the body stands (a room) or walks there (a door, a flat). */
+function bwStart( s, from, flyIn ) {
+	bwOn = true;
+	bwBeenIn = s.surface !== 'street';
+	bwFrom = from;
+	bwS = s;
+	sceneSettling = true;
+	try {
+		lvBandsReset();
+		bwHotSet( null );
+		const was = lvOpen;
+		sceneNo = 2;
+		scene2View = 'walk';
+		roomFocus = - 1;
+		roomSaid = - 2;
+		lvFocusK = 0; lvHotK = 0; lvRooms = [];
+		lvOpen = s.level === 'ROOF' ? ( was || 'L10' ) : s.level;
+		// the drawing goes: the walk sees the building as modelled
+		lvAmt = 0; LVL.LVU.amt.value = 0; lvDim = 0; LVL.LVU.dim.value = 0;
+		lvRev.fill( 0 ); lvRevT.fill( 0 );
+		for ( let k = 0; k < LVL.MAX_UNITS; k ++ ) LVL.LVU.rev.array[ k ] = 0;
+		lvBadgeTell( true );
+		lvFocusTell( true );
+		lvRoomTell( true );
+		lvRoomDotTell( true );
+		announce( 'scene', { scene: 2, view: 'walk', level: lvOpen, floor: lvStorey( lvOpen ) } );
+		$( 's_1' ).setAttribute( 'aria-pressed', 'false' );
+		$( 's_2' ).setAttribute( 'aria-pressed', 'true' );
+		controls.enabled = false;
+		mode = 'hero';
+		setCompare( false );
+		/* Under a ceiling: no cut anywhere, and the levels the body can see
+		 * shown whole (`bwApply`). A dive from the floor view keeps the cut
+		 * until the camera has passed down through the ceiling - see
+		 * `lvInsideStep`, which the dive's frames run. */
+		if ( ! flyIn || from === 'street' ) { towerPlane.constant = 1e4; lvPlane.constant = 1e4; lvInside = true; }
+		bwApply( s, ! flyIn );
+	} finally { sceneSettling = false; }
+	if ( flyIn ) {
+		const to = bwPose( s );
+		/* From the street it is a walk up to the door, low over the
+		 * pavement; from the floor view, the room dive. */
+		if ( from === 'street' ) { to.lift = 1.5; to.ease = easeInOut; flyCamera( to, 2200, 0, bwLanded ); }
+		else roomFly( to, ROOM_DUR, 'in' );
+	} else bwLanded();
+	flyApply();
+	bwTell( true );
+	invalidate( SETTLE );
+}
+/* The camera has arrived where the body stands. */
+function bwLanded() {
+	if ( ! bwOn ) return;
+	towerPlane.constant = 1e4; lvPlane.constant = 1e4; lvInside = true;
+	for ( const P of lvParts.values() ) if ( P.cap ) P.cap.visible = false;
+	camera.near = BW.NEAR;
+	bwPlace( bwS );
+	if ( fly ) { fly.sync(); bwLookAt = fly.look; }
+	shadowDirty();
+	invalidate( SETTLE );
+}
+
+/* The pose the engine's state asks for, as `flyCamera` takes it. */
+const _bwm = new THREE.Matrix4(), _bwq = new THREE.Quaternion();
+function bwPose( s ) {
+	const p = new THREE.Vector3( ...s.eye ), t = new THREE.Vector3( ...s.target );
+	const tmp = new THREE.PerspectiveCamera( BW_FOV, frameAspect(), BW.NEAR, 2600 );
+	tmp.position.copy( p ); tmp.up.set( 0, 1, 0 ); tmp.lookAt( t ); tmp.rotateZ( s.roll || 0 );
+	return { p, q: tmp.quaternion.clone(), fov: BW_FOV, shift: 0, pan: 0, target: t };
+}
+function bwPlace( s ) {
+	if ( ! s || tweens.length ) return;
+	camera.position.set( s.eye[ 0 ], s.eye[ 1 ], s.eye[ 2 ] );
+	camera.up.set( 0, 1, 0 );
+	camera.lookAt( s.target[ 0 ], s.target[ 1 ], s.target[ 2 ] );
+	if ( s.roll ) camera.rotateZ( s.roll );
+	if ( camera.fov !== BW_FOV || camera.lensShift || camera.lensPan || camera.near !== BW.NEAR
+		|| Math.abs( camera.aspect - frameAspect() ) > 1e-6 ) {
+		camera.fov = BW_FOV; camera.lensShift = 0; camera.lensPan = 0; camera.near = BW.NEAR;
+		camera.aspect = frameAspect();
+		camera.updateProjectionMatrix();
+	}
+	if ( controls ) controls.target.copy( _bwv.set( ...s.target ) );
+}
+
+/* ------------------------------------------------- the frame
+ * Called by the fly controls' `walk` hook - the keys, the drag and the
+ * thumb are theirs and this page's, the body is the engine's. Returns true
+ * to say it has taken the camera. */
+function bwStep( dt, f, r, fast, keys ) {
+	if ( ! bwOn || ! bwW ) return false;
+	if ( tweens.length ) return true;          // still walking up to it
+	/* A level (or its furniture) compiling holds the picture: the body holds
+	 * too, so it does not walk on unseen and arrive a jump later. Past
+	 * BW_HOLD_CUE the HUD says it is waiting (`bwTell`). */
+	if ( compiling ) { bwTell(); return true; }
+	const k = ( c ) => keys && keys.has( c ) ? 1 : 0;
+	const L = fly.look;
+	const look = { yaw: - ( L.yaw - bwLookAt.yaw ), pitch: L.pitch - bwLookAt.pitch };
+	const I = {
+		forward: f, strafe: k( 'KeyD' ) - k( 'KeyA' ),
+		turn: k( 'KeyE' ) + k( 'ArrowRight' ) - k( 'KeyQ' ) - k( 'ArrowLeft' ),
+		run: fast, look,
+	};
+	if ( bwTouch ) { I.forward = bwTouch.f; I.strafe = bwTouch.r; }
+	const s = bwW.step( dt, I );
+	bwS = s;
+	bwApply( s );
+	if ( fly ) { fly.sync(); bwLookAt = fly.look; }
+	if ( s.moving || look.yaw || look.pitch ) invalidate( 2 );
+	bwTell();
+	bwMapDraw();
+	// out of the street door and on down the pavement: the street's own shot
+	if ( s.surface !== 'street' ) bwBeenIn = true;
+	else if ( bwOutside( s ) > ( bwBeenIn ? BW_OUT : BW_OUT_UNVISITED ) ) bwExit( 'street' );
+	return true;
+}
+/* How far out of the building the body has walked from the door it is
+ * nearest: the doorstep is a strip in front of each street door. */
+function bwOutside( s ) {
+	let best = - Infinity;
+	for ( const p of ( lvPM && lvPM.portals ) || [] ) {
+		const mx = ( p.a[ 0 ] + p.b[ 0 ] ) / 2, my = ( p.a[ 1 ] + p.b[ 1 ] ) / 2;
+		const dx = s.pos.plan[ 0 ] - mx, dy = s.pos.plan[ 1 ] - my;
+		if ( Math.hypot( dx, dy ) > 4 ) continue;
+		best = Math.max( best, dx * p.normal[ 0 ] + dy * p.normal[ 1 ] );
+	}
+	return best;
+}
+
+/* The engine's state, on the screen. */
+const _bwh = new THREE.Vector3(), _bwu = new THREE.Vector3();
+
+/* ------------------------------------------------- the lifts' live parts
+ * What cores.glb cannot carry because it changes as the car runs:
+ *  - the CAR'S DOORS: a centre-opening pair on the shaft side of the car's
+ *    front wall, riding with the car. Shut they stop 10 mm apart, so a rider
+ *    sees the shaft, its landing doors and slab edges run past in the slit.
+ *  - the DISPLAYS: the landing indicators over every landing door and the
+ *    car's operating-panel display name the storey the car is at (the stop
+ *    nearest it), with the direction of travel, and change as it passes.
+ *  - the CALL LAMPS: the arrows on every landing's call station, a milky
+ *    lens until the car is called there, then green until its doors part.
+ * Placed off the geometry the build already has - the black glass each
+ * display and button sits on (levels.js hands its vertices over) - so the
+ * page never re-derives the lift kit's set-out. One mesh per material per
+ * job, rebuilt only when what it shows changes. */
+const LIFT_GLYPH = {
+	'0': [ '111', '101', '101', '101', '111' ], '1': [ '010', '110', '010', '010', '111' ],
+	'2': [ '111', '001', '111', '100', '111' ], '3': [ '111', '001', '111', '001', '111' ],
+	'4': [ '101', '101', '111', '001', '001' ], '5': [ '111', '100', '111', '001', '111' ],
+	'6': [ '111', '100', '111', '101', '111' ], '7': [ '111', '001', '010', '010', '010' ],
+	'8': [ '111', '101', '111', '101', '111' ], '9': [ '111', '101', '111', '001', '111' ],
+	'G': [ '111', '100', '101', '101', '111' ], 'O': [ '111', '101', '101', '101', '111' ],
+	'P': [ '111', '101', '111', '100', '100' ], '-': [ '000', '000', '111', '000', '000' ],
+	'^': [ '010', '111', '101', '000', '000' ], 'v': [ '000', '000', '101', '111', '010' ],
+};
+const liftLabel = ( id ) => id === 'L00' ? 'G' : id === 'L01' ? 'O' : id === 'P-1' ? '-1' : String( + id.slice( 1 ) - 1 );
+// the stroke of a lift door: eased in and out, as an operator drives it
+const liftEase = ( k ) => 0.5 - 0.5 * Math.cos( Math.PI * Math.max( 0, Math.min( 1, k ) ) );
+const LIFT_DOOR_H = 2.10, LIFT_GAP = 0.010;
+
+/* Boxes in the plan frame -> one non-indexed world geometry. A box is its
+ * centre c (plan x, y), axes u and v (plan unit vectors), half sizes, and
+ * a z range; every face is wound to face out whatever the frame's hand. */
+function liftBoxes( boxes ) {
+	const pos = [], nor = [];
+	const W = ( x, y, z ) => frameP.world( x, y, z, new THREE.Vector3() );
+	const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _n = new THREE.Vector3();
+	for ( const [ c, u, v, hu, hv, z0, z1 ] of boxes ) {
+		const P = ( su, sv, z ) => W( c[ 0 ] + u[ 0 ] * su * hu + v[ 0 ] * sv * hv, c[ 1 ] + u[ 1 ] * su * hu + v[ 1 ] * sv * hv, z );
+		const faces = [
+			[ [ 1, - 1, z0 ], [ 1, 1, z0 ], [ 1, 1, z1 ], [ 1, - 1, z1 ], [ u, 0 ] ],
+			[ [ - 1, 1, z0 ], [ - 1, - 1, z0 ], [ - 1, - 1, z1 ], [ - 1, 1, z1 ], [ u, 1 ] ],
+			[ [ 1, 1, z0 ], [ - 1, 1, z0 ], [ - 1, 1, z1 ], [ 1, 1, z1 ], [ v, 0 ] ],
+			[ [ - 1, - 1, z0 ], [ 1, - 1, z0 ], [ 1, - 1, z1 ], [ - 1, - 1, z1 ], [ v, 1 ] ],
+			[ [ - 1, - 1, z1 ], [ 1, - 1, z1 ], [ 1, 1, z1 ], [ - 1, 1, z1 ], [ null, 0 ] ],
+			[ [ - 1, 1, z0 ], [ 1, 1, z0 ], [ 1, - 1, z0 ], [ - 1, - 1, z0 ], [ null, 1 ] ],
+		];
+		for ( const [ p0, p1, p2, p3, [ ax, neg ] ] of faces ) {
+			const q = [ p0, p1, p2, p3 ].map( ( p ) => P( p[ 0 ], p[ 1 ], p[ 2 ] ) );
+			// the way this face looks, in the world
+			if ( ax ) _n.copy( frameP.ex ).multiplyScalar( ax[ 0 ] ).addScaledVector( frameP.ey, ax[ 1 ] );
+			else _n.copy( frameP.up );
+			if ( neg ) _n.negate();
+			_a.subVectors( q[ 1 ], q[ 0 ] ); _b.subVectors( q[ 2 ], q[ 0 ] );
+			const flip = _a.cross( _b ).dot( _n ) < 0;
+			const tri = flip ? [ 0, 2, 1, 0, 3, 2 ] : [ 0, 1, 2, 0, 2, 3 ];
+			for ( const k of tri ) { pos.push( q[ k ].x, q[ k ].y, q[ k ].z ); nor.push( _n.x, _n.y, _n.z ); }
+		}
+	}
+	const g = new THREE.BufferGeometry();
+	g.setAttribute( 'position', new THREE.Float32BufferAttribute( pos, 3 ) );
+	g.setAttribute( 'normal', new THREE.Float32BufferAttribute( nor, 3 ) );
+	// the interiors' shaders read the owning flat's place: the lift is nobody's
+	g.setAttribute( 'aunit', new THREE.Float32BufferAttribute( new Float32Array( pos.length / 3 ), 1 ) );
+	g.computeBoundingSphere();
+	return g;
+}
+/* Dot-matrix text centred on plan point c at height zc: `ur` runs to the
+ * reader's right, `no` out of the glass towards them, dots from t0 to t1
+ * along it (lib_plan `_dots`). */
+function liftDots( out, text, c, ur, no, t0, t1, zc, px = 0.011, pitch = 0.014 ) {
+	const w = text.length * 3 * pitch + ( text.length - 1 ) * pitch;
+	let x = - w / 2 + pitch / 2;
+	const tc = 0.5 * ( t0 + t1 );
+	for ( const ch of text ) {
+		const g = LIFT_GLYPH[ ch ];
+		if ( g ) for ( let r = 0; r < 5; r ++ ) for ( let k = 0; k < 3; k ++ ) if ( g[ r ][ k ] === '1' ) {
+			const s_ = x + k * pitch, z_ = zc + ( 2 - r ) * pitch;
+			out.push( [ [ c[ 0 ] + ur[ 0 ] * s_ + no[ 0 ] * tc, c[ 1 ] + ur[ 1 ] * s_ + no[ 1 ] * tc ], ur, no,
+				px / 2, ( t1 - t0 ) / 2, z_ - px / 2, z_ + px / 2 ] );
+		}
+		x += 4 * pitch;
+	}
+}
+/* The plan-frame box of the vertices `pos` (world) whose height passes `keep`. */
+function liftBox( pos, keep ) {
+	const b = [ Infinity, Infinity, Infinity, - Infinity, - Infinity, - Infinity ];
+	const v = new THREE.Vector3();
+	for ( let i = 0; i < pos.length; i += 3 ) {
+		v.set( pos[ i ], pos[ i + 1 ], pos[ i + 2 ] );
+		const p = frameP.plan( v );
+		if ( ! keep( p[ 2 ] ) ) continue;
+		for ( let k = 0; k < 3; k ++ ) { b[ k ] = Math.min( b[ k ], p[ k ] ); b[ k + 3 ] = Math.max( b[ k + 3 ], p[ k ] ); }
+	}
+	return b[ 0 ] === Infinity ? null : b;
+}
+
+function liftKit( group, geo, pm ) {
+	const kits = new Map();
+	if ( ! geo || ! pm || ! frameP ) return kits;
+	const mk = ( mat, name ) => {
+		const m = new THREE.Mesh( new THREE.BufferGeometry(), lvMat( mat ) );
+		m.name = name; m.matrixAutoUpdate = false; m.frustumCulled = false;
+		m.castShadow = false; m.receiveShadow = true;
+		m.visible = false;
+		group.add( m );
+		return m;
+	};
+	for ( const rec of pm.lifts || [] ) {
+		const id = rec.core + '-' + rec.shaft;
+		const cab = LVL.ringOf( rec.cab );
+		const xs = cab.map( p => p[ 0 ] ), ys = cab.map( p => p[ 1 ] );
+		const bx0 = Math.min( ...xs ), bx1 = Math.max( ...xs ), by0 = Math.min( ...ys ), by1 = Math.max( ...ys );
+		const cx = ( bx0 + bx1 ) / 2, cy = ( by0 + by1 ) / 2;
+		const rest = ( rec.stops.find( x => x.level === rec.car_at ) || rec.stops[ 0 ] ).z;
+		const seg = ( rec.stops.find( x => x.door ) || {} ).door;
+		if ( ! seg ) continue;
+		const [ a, b ] = seg;
+		// the car's front: the side its landing doors are on (lib_plan `lift_car`)
+		const alongY = Math.abs( a[ 0 ] - b[ 0 ] ) < 1e-3;
+		const v = alongY ? [ a[ 0 ] > cx ? 1 : - 1, 0 ] : [ 0, a[ 1 ] > cy ? 1 : - 1 ];   // out of the car
+		const u = alongY ? [ 0, 1 ] : [ 1, 0 ];
+		const o0 = Math.min( alongY ? a[ 1 ] : a[ 0 ], alongY ? b[ 1 ] : b[ 0 ] ), o1 = Math.max( alongY ? a[ 1 ] : a[ 0 ], alongY ? b[ 1 ] : b[ 0 ] );
+		const hw = ( o1 - o0 ) / 2 - 0.05, mid = ( o0 + o1 ) / 2;
+		const face = alongY ? ( v[ 0 ] > 0 ? bx1 : bx0 ) : ( v[ 1 ] > 0 ? by1 : by0 );
+		// each leaf: from the slit to 25 mm behind the jamb, 12..34 mm out of the car's front
+		const leafW = hw + 0.025 - LIFT_GAP / 2, dOut = face * ( alongY ? v[ 0 ] : v[ 1 ] ) + 0.023;
+		const leaf = ( sg ) => {
+			const cu = mid + sg * ( LIFT_GAP / 2 + leafW / 2 );
+			const c = alongY ? [ dOut * v[ 0 ], cu ] : [ cu, dOut * v[ 1 ] ];
+			// a skin and a raised panel on each face, as the landing leaves
+			return liftBoxes( [ [ c, u, v, leafW / 2, 0.011, rest, rest + LIFT_DOOR_H + 0.02 ],
+				[ [ c[ 0 ] - v[ 0 ] * 0.0125, c[ 1 ] - v[ 1 ] * 0.0125 ], u, v, leafW / 2 - 0.045, 0.0015, rest + 0.10, rest + LIFT_DOOR_H - 0.08 ] ] );
+		};
+		const K = { id, rest, u, hw, doors: [], text: null, called: undefined, off: 0, k: - 1 };
+		for ( const sg of [ - 1, 1 ] ) {
+			const m = mk( 'chrome', 'lift_' + id + '_cardoor' + ( sg < 0 ? 'L' : 'R' ) );
+			m.material = lvMat( 'lift_chrome' ) || m.material;
+			m.geometry = leaf( sg ); m.userData.sg = sg;
+			m.castShadow = true;
+			K.doors.push( m );
+		}
+		// the car's display (its operating panel) and the arrow strip over its door
+		const cpos = geo.car.get( rec.car_node );
+		const disp = cpos && liftBox( cpos, ( z ) => z > rest + 1.49 && z < rest + 1.60 );
+		const strip = cpos && liftBox( cpos, ( z ) => z > rest + 2.14 && z < rest + 2.22 );
+		const inward = [ - v[ 0 ], - v[ 1 ] ];
+		K.carAt = [];
+		for ( const bb of [ disp, strip ] ) {
+			if ( ! bb ) { K.carAt.push( null ); continue; }
+			const c = [ ( bb[ 0 ] + bb[ 3 ] ) / 2, ( bb[ 1 ] + bb[ 4 ] ) / 2 ];
+			// the glass's face towards the car's middle
+			const f = alongY ? ( inward[ 0 ] > 0 ? bb[ 3 ] : bb[ 0 ] ) : ( inward[ 1 ] > 0 ? bb[ 4 ] : bb[ 1 ] );
+			const c0 = alongY ? [ f, c[ 1 ] ] : [ c[ 0 ], f ];
+			K.carAt.push( { c: c0, z: ( bb[ 2 ] + bb[ 5 ] ) / 2, ur: [ - v[ 1 ], v[ 0 ] ], no: inward } );
+		}
+		K.carLed = mk( 'neon_orange', 'lift_' + id + '_carled' );
+		// the landings: an indicator over each door, a call station beside it
+		K.land = [];
+		for ( const st of rec.stops ) {
+			if ( ! st.door ) continue;
+			const pos = geo.ind.get( `in_${ rec.core }_lift${ rec.shaft }_${ st.level }_ind__int_black` );
+			if ( ! pos ) continue;
+			const [ p, q ] = st.door, mx = ( p[ 0 ] + q[ 0 ] ) / 2, my = ( p[ 1 ] + q[ 1 ] ) / 2;
+			const no = [ v[ 0 ], v[ 1 ] ];                                   // into the lobby
+			const ur = [ no[ 1 ], - no[ 0 ] ];                               // lib_plan: r = (-f.y, f.x), f = -no
+			const ib = liftBox( pos, ( z ) => z > st.z + 1.8 );
+			const frontOf = ( bb ) => alongY ? ( no[ 0 ] > 0 ? bb[ 3 ] : bb[ 0 ] ) : ( no[ 1 ] > 0 ? bb[ 4 ] : bb[ 1 ] );
+			const at = ( bb, f ) => alongY ? [ f, ( bb[ 1 ] + bb[ 4 ] ) / 2 ] : [ ( bb[ 0 ] + bb[ 3 ] ) / 2, f ];
+			const k_ = rec.stops.indexOf( st );
+			// the walk calls a car without asking where the visitor is going:
+			// the lamp that lights is the way most of the building lies
+			const way = k_ < ( rec.stops.length - 1 ) / 2 ? 1 : - 1;
+			const L = { level: st.level, way, ind: ib ? { c: at( ib, frontOf( ib ) ), z: ( ib[ 2 ] + ib[ 5 ] ) / 2 } : null, btn: [], no, ur, mid: [ mx, my ] };
+			// the call buttons: the black squares low on the wall, top to bottom
+			const lows = [];
+			for ( let i = 0; i < pos.length; i += 3 ) {
+				const w = frameP.plan( _bwh.set( pos[ i ], pos[ i + 1 ], pos[ i + 2 ] ) );
+				if ( w[ 2 ] > st.z + 0.9 && w[ 2 ] < st.z + 1.3 ) lows.push( w );
+			}
+			// top to bottom; a button is 38 mm tall and the next is 62 mm under it
+			lows.sort( ( m, n ) => n[ 2 ] - m[ 2 ] );
+			const groups = [];
+			for ( const w of lows ) {
+				const g = groups[ groups.length - 1 ];
+				if ( g && g.lo - w[ 2 ] < 0.05 ) { g.pts.push( w ); g.lo = w[ 2 ]; } else groups.push( { lo: w[ 2 ], pts: [ w ] } );
+			}
+			const first = st.level === rec.stops[ 0 ].level, last = st.level === rec.stops[ rec.stops.length - 1 ].level;
+			groups.forEach( ( G, k ) => {
+				const bb = [ Infinity, Infinity, Infinity, - Infinity, - Infinity, - Infinity ];
+				for ( const w of G.pts ) for ( let j = 0; j < 3; j ++ ) { bb[ j ] = Math.min( bb[ j ], w[ j ] ); bb[ j + 3 ] = Math.max( bb[ j + 3 ], w[ j ] ); }
+				const arrow = groups.length === 2 ? ( k === 0 ? '^' : 'v' ) : ( first ? '^' : last ? 'v' : '^' );
+				L.btn.push( { c: at( bb, frontOf( bb ) ), z: ( bb[ 2 ] + bb[ 5 ] ) / 2, arrow, way: arrow === '^' ? 1 : - 1 } );
+			} );
+			K.land.push( L );
+		}
+		K.landLed = mk( 'neon_orange', 'lift_' + id + '_landled' );
+		K.lampOn = mk( 'lift_green', 'lift_' + id + '_lampon' );
+		K.lampOff = mk( 'lift_lamp_off', 'lift_' + id + '_lampoff' );
+		kits.set( id, K );
+	}
+	// the first frame shows something on every mesh, so the gate compiles them all
+	for ( const K of kits.values() ) liftKitSet( K, { z: K.rest, doorOpen: 0, shows: 'L00', dir: 0, called: null }, 0, true );
+	return kits;
+}
+const _lkm = new THREE.Matrix4();
+/* One lift's live parts to the walk's state `l`; `off` is the car's rise
+ * over its rest. Returns true if anything was rebuilt. */
+function liftKitSet( K, l, off, warm = false ) {
+	if ( ! K ) return false;
+	let changed = false;
+	const k = liftEase( l.doorOpen || 0 );
+	if ( off !== K.off || k !== K.k ) {
+		K.off = off; K.k = k;
+		for ( const m of K.doors ) {
+			const s = m.userData.sg * ( K.hw + 0.012 ) * k;
+			_bwu.copy( frameP.up ).multiplyScalar( off )
+				.addScaledVector( frameP.ex, K.u[ 0 ] * s ).addScaledVector( frameP.ey, K.u[ 1 ] * s );
+			m.matrix.makeTranslation( _bwu.x, _bwu.y, _bwu.z );
+			m.matrixWorldNeedsUpdate = true;
+			m.visible = true;
+		}
+		_bwu.copy( frameP.up ).multiplyScalar( off );
+		K.carLed.matrix.makeTranslation( _bwu.x, _bwu.y, _bwu.z );
+		K.carLed.matrixWorldNeedsUpdate = true;
+	}
+	// what the displays say: the storey, and the way the car is going
+	const arrow = l.dir > 0 ? '^' : l.dir < 0 ? 'v' : '';
+	const lab = liftLabel( l.shows || 'L00' );
+	const text = arrow + lab;
+	if ( text !== K.text || warm ) {
+		K.text = text;
+		const car = [], land = [];
+		const [ D, S ] = K.carAt;
+		if ( D ) liftDots( car, text, D.c, D.ur, D.no, 0.0005, 0.002, D.z, 0.008, 0.010 );
+		if ( S && arrow ) liftDots( car, arrow, S.c, S.ur, S.no, 0.0005, 0.002, S.z, 0.007, 0.009 );
+		for ( const L of K.land ) if ( L.ind ) liftDots( land, text, L.ind.c, L.ur, L.no, 0.0005, 0.002, L.ind.z );
+		for ( const [ m, boxes ] of [ [ K.carLed, car ], [ K.landLed, land ] ] ) {
+			m.geometry.dispose();
+			m.geometry = boxes.length ? liftBoxes( boxes ) : new THREE.BufferGeometry();
+			m.visible = boxes.length > 0;
+		}
+		changed = true;
+	}
+	const called = l.called || null;
+	if ( called !== K.called || warm ) {
+		K.called = called;
+		const on = [], offB = [];
+		for ( const L of K.land ) for ( const B of L.btn )
+			liftDots( L.level === called && ( B.way === L.way || L.btn.length === 1 ) ? on : offB, B.arrow, B.c, L.ur, L.no, 0.0005, 0.002, B.z, 0.006, 0.008 );
+		// a warm-up lights one lamp, so the green's pipeline is built with the rest
+		if ( warm && ! on.length && offB.length ) on.push( offB[ 0 ] );
+		for ( const [ m, boxes ] of [ [ K.lampOn, on ], [ K.lampOff, offB ] ] ) {
+			m.geometry.dispose();
+			m.geometry = boxes.length ? liftBoxes( boxes ) : new THREE.BufferGeometry();
+			m.visible = boxes.length > 0;
+		}
+		if ( warm ) K.called = undefined;
+		changed = true;
+	}
+	return changed;
+}
+
+function bwApply( s, place = true ) {
+	if ( ! s ) return;
+	/* What has to be here: what the engine needs - but a car between
+	 * storeys needs only where it is going (its doors are shut on every
+	 * storey it passes). */
+	/* A car going past a storey needs its walls (the shaft is theirs) but
+	 * not its furniture; where it is going, both. */
+	const riding = !! ( s.inLift && s.inLift.riding );
+	const want = s.needLevels;
+	if ( riding ) { bwWant( want, false ); bwWant( [ s.inLift.to ] ); } else bwWant( want );
+	/* Ahead of the visitor: in a car, the storeys either side of it (the
+	 * likeliest stops) - walls and furniture, so a first arrival's compile
+	 * happens while the doors are still open here, not on arrival there. A
+	 * flight is already covered: `needLevels` holds both of its ends. */
+	if ( s.inLift && /^L\d\d$/.test( s.level ) && ! bwAhead.has( s.inLift.id + s.level ) ) {
+		bwAhead.add( s.inLift.id + s.level );
+		const k = lvStorey( s.level );
+		bwWant( [ lvOfStorey( k + 1 ), lvOfStorey( k - 1 ) ].filter( id => id && lvMetaLevel( id ) && id !== s.level ) );
+	}
+	if ( ! s.inLift ) bwAhead.clear();
+	const show = new Set( want.filter( id => bwHere( id, riding && id !== s.inLift.to ? 'shaft' : null ) ) );
+	if ( bwHere( s.level ) ) show.add( s.level );
+	let changed = false;
+	for ( const P of lvParts.values() ) {
+		if ( P.name === 'cores' || P.state !== 'in' || P.warming ) continue;   // warming: see `lvWarmWalk`
+		const on = show.has( P.name );
+		if ( P.group.visible !== on ) { lvShow( P.name, on ); changed = true; }
+		if ( P.cap && P.cap.visible ) P.cap.visible = false;
+		if ( on && P.furn && P.furnAll !== 1 ) { P.furn.walk( true ); P.furnAll = 1; changed = true; }
+	}
+	const C = lvParts.get( 'cores' );
+	if ( C && C.group && ! C.group.visible && C.state === 'in' ) { C.group.visible = true; changed = true; }
+	bwShown = show;
+	// the street's loggia panes of the storeys on screen: the interior's own leaves glaze the doors
+	if ( lgSplit( show ) ) changed = true;
+	// the street's stand-in door leaves go once the hall's own are on screen
+	bwStreetLeafSet( ! show.has( 'L00' ) );
+	// ...and the leaves the engine has open
+	const seen = new Set();
+	for ( const d of s.doors ) {
+		const P = lvParts.get( d.level );
+		if ( ! P || ! P.movers || ! show.has( d.level ) ) continue;
+		const N = P.movers.nodes.get( d.node );
+		if ( ! N || ! N.door ) continue;
+		const h = N.door.hinge, L = lvLevel( d.level );
+		frameP.world( h[ 0 ], h[ 1 ], L ? L.z : 0, _bwh );
+		const a = - ( d.angle - N.door.shut ) * Math.PI / 180;
+		_bwm.makeTranslation( _bwh.x, _bwh.y, _bwh.z )
+			.multiply( new THREE.Matrix4().makeRotationAxis( frameP.up, a ) )
+			.multiply( new THREE.Matrix4().makeTranslation( - _bwh.x, - _bwh.y, - _bwh.z ) );
+		P.movers.set( d.node, _bwm );
+		seen.add( d.node ); bwOut.set( d.node, d.level );
+	}
+	for ( const [ node, lv ] of bwOut ) if ( ! seen.has( node ) ) {
+		const P = lvParts.get( lv );
+		if ( P && P.movers ) P.movers.set( node, null );
+		bwOut.delete( node );
+		changed = true;
+	}
+	// the cars, and the landing doors they open
+	if ( C && C.movers && lvPM ) {
+		for ( const l of s.lifts ) {
+			const rec = ( lvPM.lifts || [] ).find( x => x.core + '-' + x.shaft === l.id );
+			if ( ! rec ) continue;
+			const rest = ( rec.stops.find( x => x.level === rec.car_at ) || rec.stops[ 0 ] ).z;
+			_bwu.copy( frameP.up ).multiplyScalar( l.z - rest );
+			C.movers.set( l.car, _bwm.makeTranslation( _bwu.x, _bwu.y, _bwu.z ) );
+			if ( C.lifts && liftKitSet( C.lifts.get( l.id ), l, l.z - rest ) ) changed = true;
+			for ( const st of rec.stops ) {
+				/* Two leaves that part in the middle, each sliding its own
+				 * width into the wall beside the opening - on the same
+				 * eased stroke as the car's own pair (`liftKitSet`). */
+				const k = l.level === st.level ? liftEase( l.doorOpen ) : 0;
+				const dx = ( st.door[ 1 ][ 0 ] - st.door[ 0 ][ 0 ] ) * 0.48 * k, dy = ( st.door[ 1 ][ 1 ] - st.door[ 0 ][ 1 ] ) * 0.48 * k;
+				for ( const [ leaf, sg ] of [ [ 'door', - 1 ], [ 'door2', 1 ] ] ) {
+					const node = `in_${ rec.core }_lift${ rec.shaft }_${ st.level }_${ leaf }__chrome`;
+					if ( k <= 0 ) { if ( C.movers.out.has( node ) ) { C.movers.set( node, null ); changed = true; } continue; }
+					_bwu.copy( frameP.ex ).multiplyScalar( dx * sg ).addScaledVector( frameP.ey, dy * sg );
+					C.movers.set( node, _bwm.makeTranslation( _bwu.x, _bwu.y, _bwu.z ) );
+				}
+			}
+		}
+	}
+	for ( const P of lvParts.values() ) if ( P.movers && P.movers.flush() ) changed = true;
+	/* The sun's map is drawn again when something that casts has MOVED -
+	 * a leaf turning, a car, its doors - and not merely because a door is
+	 * standing open: the map is the most expensive thing on the page. */
+	let sig = '';
+	for ( const d of s.doors ) sig += d.node + ( d.angle * 4 | 0 ) + ';';
+	for ( const l of s.lifts ) sig += ( l.z * 100 | 0 ) + ':' + ( l.doorOpen * 50 | 0 ) + ';';
+	if ( sig !== bwSig ) { bwSig = sig; shadowDirty(); }
+	if ( changed ) { shadowDirty(); invalidate( 2 ); }
+	// the sun, fitted to where the body is, and the light of where it stands
+	bwShadow( s.flat || s.office ? BW_SHADOW_FLAT : BW_SHADOW_COMMON );
+	bwLightAim( s );
+	if ( place ) bwPlace( s );
+}
+
+function bwShadow( far ) {
+	if ( ! sun || ! sun.shadow.camera || ROOM_SHADOW <= 0 ) return;
+	if ( far === bwShadowFar && roomShadowOn ) return;
+	bwShadowFar = far;
+	roomShadowOn = true;
+	sun.shadow.camera.far = far;
+	shadowDirty();
+}
+
+/* Does the interior hang its own leaf in EVERY street door that has a
+ * stand-in? scene_meta.site.entrances[] says which street leaves a door has
+ * (`street_leaf`) and what the build thought of the interior
+ * (`interior_leaf`); plan_meta's portals say what the interior actually
+ * carries (`nodes`), and either is enough - since build 3 C3 (a made double
+ * door) and the terrace stair's door have leaves of their own as well as C1
+ * and C2. The street's stand-ins are one welded group, so they go together:
+ * only when no doorway would be left standing open without a leaf. */
+let bwLeafCover = null;
+function bwStreetLeafCovered() {
+	if ( bwLeafCover !== null ) return bwLeafCover;
+	const ents = ( meta && meta.site && meta.site.entrances ) || [];
+	const portals = ( lvPM && lvPM.portals ) || [];
+	if ( ! lvPM ) return true;               // the old rule until plan_meta is in
+	const bare = ents.filter( e => ( e.street_leaf || [] ).length && ! e.interior_leaf
+		&& ! portals.some( p => ( p.core || p.id ) === e.id && ( ( p.nodes && p.nodes.length ) || p.node ) ) );
+	if ( bare.length ) console.info( 'walk: street doors with no interior leaf, stand-ins kept:', bare.map( e => e.id ) );
+	return ( bwLeafCover = ! bare.length );
+}
+/* The street's own door leaves - stand-ins drawn shut, which the hall's leaf
+ * replaces once the hall is on screen (CONTRACT "Street doors"). They were
+ * set aside into their own group by `groupOf` so they can be hidden. */
+function bwStreetLeafSet( on ) {
+	if ( ! on && ! bwStreetLeafCovered() ) on = true;
+	if ( ! groups.leaf || groups.leaf.visible === on ) return;
+	groups.leaf.visible = on;
+	shadowDirty();
+	invalidate( 2 );
+}
+
+/* ------------------------------------------------- the light indoors
+ * The street is lit for the street: a sky PMREM at 1.45 that every surface
+ * sees whole, a cold hemisphere, an exposure set for a sunlit facade. Under a
+ * ceiling none of that is true - the sky comes in through a window or two
+ * and most of what lights a room is that light again, off a white ceiling
+ * and a warm floor - and the street's set-up laid over a room reads as a
+ * grey-navy wash with no direction in it (perf-shots/tourcheck, build 3).
+ *
+ * So a visitor under a ceiling gets a room's light: the sky's share cut back
+ * (`env`), the hemisphere turned into the bounce - warm white from above,
+ * parquet from below - and an eye that has adapted to indoors (`exp`), with
+ * the lens' vignette eased off. Corridors, halls and stairs have no windows
+ * at all, so their fill is a little stronger (`common`). Nothing is added or
+ * taken away - the same light, the same uniforms, different values - so no
+ * pipeline is built for it and the street, where `t` is 0, is the street to
+ * the bit. It eases over ~0.6 s on the frame loop (`bwLightStep`), so a step
+ * in from a loggia or the street is an eye adjusting, not a switch.
+ * `?inlight=env,hemi,exp,common` tunes it; `?inlight=0` keeps the street's. */
+const BW_LIGHT = ( () => {
+	const q = ( __q.get( 'inlight' ) || '' ).split( ',' ).map( Number );
+	const v = ( i, d ) => Number.isFinite( q[ i ] ) && q[ i ] > 0 ? q[ i ] : d;
+	return { off: __q.get( 'inlight' ) === '0',
+		env: v( 0, 0.6 ), hemi: v( 1, 2.0 ), exp: v( 2, 1.16 ), common: v( 3, 1.4 ),
+		sky: new THREE.Color( __q.get( 'insky' ) || 0xfffaf2 ), ground: new THREE.Color( __q.get( 'inground' ) || 0xdcc6aa ), vign: 0.35 };
+} )();
+let bwLightT = 0, bwLightGoal = 0, bwLightK = 1, bwLightOut = null;
+const _bwc = new THREE.Color();
+/* Is the body under a ceiling, and in a room with windows (1) or a corridor,
+ * a hall, a stair or a car (BW_LIGHT.common)? */
+function bwLightAim( s ) {
+	if ( ! s || BW_LIGHT.off ) { bwLightGoal = 0; return; }
+	const out = s.surface === 'street' || s.surface === 'terrace' || s.surface === 'loggia'
+		|| ( s.room && s.room.kind === 'loggia' );
+	bwLightGoal = out ? 0 : 1;
+	if ( ! out ) bwLightK = s.flat || s.office ? 1 : BW_LIGHT.common;
+}
+function bwLightSet( t ) {
+	if ( ! hemi || ! sun ) return;
+	if ( ! bwLightOut ) bwLightOut = { env: scene.environmentIntensity, hemi: hemi.intensity,
+		sky: hemi.color.clone(), ground: hemi.groundColor.clone(), exp: renderer.toneMappingExposure };
+	const O = bwLightOut;
+	if ( t <= 0 ) {
+		// the street's own values, as they were - not a lerp that lands near them
+		scene.environmentIntensity = O.env; hemi.intensity = O.hemi;
+		hemi.color.copy( O.sky ); hemi.groundColor.copy( O.ground );
+		renderer.toneMappingExposure = O.exp; vignAmount.value = 1.0;
+		return;
+	}
+	const L = BW_LIGHT;
+	scene.environmentIntensity = O.env + ( L.env - O.env ) * t;
+	hemi.intensity = O.hemi + ( L.hemi * bwLightK - O.hemi ) * t;
+	hemi.color.copy( O.sky ).lerp( _bwc.copy( L.sky ), t );
+	hemi.groundColor.copy( O.ground ).lerp( _bwc.copy( L.ground ), t );
+	renderer.toneMappingExposure = O.exp + ( L.exp - O.exp ) * t;
+	vignAmount.value = 1 - ( 1 - L.vign ) * t;
+}
+/* On the frame loop: true while it is still easing (a frame is owed). */
+function bwLightStep( dt ) {
+	if ( ! bwOn ) bwLightGoal = 0;
+	if ( bwLightT === bwLightGoal ) return false;
+	const k = dt / 0.6;
+	bwLightT = bwLightGoal > bwLightT ? Math.min( bwLightGoal, bwLightT + k ) : Math.max( bwLightGoal, bwLightT - k );
+	bwLightSet( bwLightT );
+	return true;
+}
+window.__bwLight = () => ( { t: bwLightT, goal: bwLightGoal, k: bwLightK, env: scene && scene.environmentIntensity,
+	hemi: hemi && hemi.intensity, exp: renderer && renderer.toneMappingExposure, vign: vignAmount.value } );
+
+/* ------------------------------------------------- the way out */
+function bwExit( to = null ) {
+	if ( ! bwOn ) return false;
+	const s = bwS;
+	bwOn = false;
+	bwAsk ++;
+	bwEnded = performance.now();
+	bwTouch = null;
+	camera.near = 0.25;
+	camera.updateProjectionMatrix();
+	roomShadowOn = false;
+	if ( sun && sun.shadow.camera ) sun.shadow.camera.far = SHADOW_FAR;
+	bwShadowFar = 0;
+	// every leaf and car back where the welds have them
+	for ( const P of lvParts.values() ) if ( P.movers ) {
+		for ( const n of [ ...P.movers.out.keys() ] ) if ( P.name !== 'cores' || ! LVL.LIFT_CAR.test( n ) ) P.movers.set( n, null );
+		P.movers.flush();
+	}
+	bwOut.clear();
+	bwStreetLeafSet( true );
+	// the section caps, which the walk took off every level it showed, and the loggia panes
+	for ( const P of lvParts.values() ) if ( P.cap ) P.cap.visible = true;
+	lgSplit( null );
+	const level = s && s.level && /^L\d\d$/.test( s.level ) ? s.level : null;
+	const goStreet = to === 'street' || ! level || level === 'L00' || ( ! to && bwFrom === 'street' && level === 'L00' );
+	bwTell( true );
+	/* 'none': whoever called is about to put the scene somewhere itself (a
+	 * level opened, the street asked for) - only the walk is undone. */
+	if ( to === 'none' ) {
+		scene2View = 'plan';
+		lvInside = true;            // so the next `lvInsideSet( false )` puts the cut and the caps back
+		for ( const id of bwShown ) lvShow( id, false );
+		bwShown.clear();
+		lvOpen = null;
+		return true;
+	}
+	if ( goStreet ) {
+		/* Back to the street: the levels go away behind the camera once it
+		 * is out - not before, or the first frames of the flight would be
+		 * a hall with nothing in it. */
+		lvInside = false;
+		lvOpen = level || lvOpen;
+		scene2View = 'plan';
+		const gone = [ ...bwShown ].filter( id => id !== lvOpen );
+		bwShown.clear();
+		// the camera leaves through full-height rooms: no ink slab at 1.45 m in them
+		const P0 = lvParts.get( lvOpen );
+		if ( P0 && P0.cap ) P0.cap.visible = false;
+		lvLeave( true );
+		setTimeout( () => { if ( ! bwOn && sceneNo === 1 ) for ( const id of gone ) lvShow( id, false ); }, FLOOR_IN + 100 );
+		return true;
+	}
+	/* Back up to the floor view of the storey the body is on, with the flat it
+	 * is standing in open. */
+	for ( const id of bwShown ) if ( id !== level ) lvShow( id, false );
+	bwShown.clear();
+	for ( const P of lvParts.values() ) if ( P.furn ) { P.furnAll = 0; lvFurnSync( P ); }
+	scene2View = 'plan';
+	lvInside = true;            // `lvEnter`'s `lvInsideSet( false )` then puts the cut and its caps back
+	const n = s.flat || null;
+	lvOpen = level;
+	sceneNo = 2;
+	lvEnterFromWalk( level, n );
+	return true;
+}
+/* `lvEnter` with the camera coming UP out of the building rather than
+ * across from the street: the cut comes back at once and the camera rises
+ * to the plan (or to the flat, if the body was standing in one). */
+function lvEnterFromWalk( id, n ) {
+	const L = lvLevel( id );
+	if ( ! L ) return;
+	lvOpen = null;               // so `lvEnter` does not take it for the open level
+	sceneNo = 2;
+	lvEnter( id, n );
+}
+
+/* ------------------------------------------------- the street's doors
+ * The three entrance doors and the terrace stair's, as hit quads where
+ * scene_meta says the doors are: a pointer over one says so, a click walks
+ * up to it. */
+function bwBuildDoors() {
+	const E = meta && meta.site && meta.site.entrances;
+	if ( ! E || ! frameP ) return;
+	const pickMat = new THREE.MeshBasicMaterial( { side: THREE.DoubleSide } );
+	bwPick = new THREE.Group();
+	bwPick.name = 'door_pick';
+	for ( const e of E ) {
+		/* Only doors a walk can begin at: the entrances and the terrace stair.
+		 * The shop doors (`kind: 'commercial'`, model build 4) have no portal
+		 * in plan_meta and no number to name them by. */
+		if ( e.kind === 'commercial' || ( e.kind == null && ! /^(C\d|podium)$/.test( e.id ) ) ) continue;
+		const w = ( e.w || 1 ) + 0.6, h = ( e.h || 2.1 ) + 0.3;
+		const a = Math.atan2( e.out[ 1 ], e.out[ 0 ] );
+		const t = [ - Math.sin( a ), Math.cos( a ) ];          // along the door
+		const c = frameP.world( e.door[ 0 ] + e.out[ 0 ] * 0.15, e.door[ 1 ] + e.out[ 1 ] * 0.15, ( e.z || 0 ) + h / 2 );
+		const u = frameP.world( t[ 0 ], t[ 1 ], 0 ).sub( frameP.world( 0, 0, 0 ) ).normalize();
+		const g = new THREE.PlaneGeometry( w, h );
+		g.applyMatrix4( new THREE.Matrix4().makeBasis( u, frameP.up, new THREE.Vector3().crossVectors( u, frameP.up ) ).setPosition( c ) );
+		const m = new THREE.Mesh( g, pickMat );
+		m.visible = false;
+		m.userData.portal = e.id;
+		bwPick.add( m );
+	}
+	scene.add( bwPick );
+}
+function bwDoorUnder( px ) {
+	if ( ! px || ! bwPick ) return null;
+	const r = renderer.domElement.getBoundingClientRect();
+	_fndc.set( ( px[ 0 ] - r.left ) / r.width * 2 - 1, - ( ( px[ 1 ] - r.top ) / r.height ) * 2 + 1 );
+	_fray.setFromCamera( _fndc, camera );
+	const hit = _fray.intersectObjects( bwPick.children, false )[ 0 ];
+	if ( ! hit ) return null;
+	/* ...and only if nothing of the street stands in front of it (a tree, a
+	 * parasol): the door has to be what the pointer is on. */
+	const solid = _fray.intersectObjects( [ groups.main, groups.tower ].filter( Boolean ), true )
+		.find( h => h.object.isMesh && h.object.visible );
+	if ( solid && solid.distance < hit.distance - 0.6 ) return null;
+	return hit.object.userData.portal;
+}
+function bwHotSet( id ) {
+	if ( id === bwHot ) return;
+	bwHot = id;
+	const k = id ? ( /^C(\d)$/.exec( id ) || [] )[ 1 ] : null;
+	announce( 'door', { portal: id, k: k ? + k : null, terrace: id === 'podium' } );
+	embedCursor( false );
+	invalidate( 2 );
+}
+
+/* ------------------------------------------------- what the page is told
+ * `lp:walk` - on/off, the storey (and the residential floor 1..9), the flat
+ * or office, the room with its Georgian name, the lift's stops - only when
+ * one of them changes. The page draws the HUD and the lift's buttons. */
+function bwTell( force = false ) {
+	const s = bwS;
+	let d;
+	if ( ! bwOn || ! s ) d = { on: false };
+	else {
+		const ml = lvMetaLevel( s.level );
+		let room = null;
+		if ( s.room ) {
+			room = { name: s.room.name, kind: s.room.kind, ka: null };
+			const L = lvLevel( s.level );
+			const u = L && L.units.find( x => ( s.flat != null && ! x.office && String( x.n ) === String( s.flat ) )
+				|| ( s.office != null && x.office && String( x.n ) === String( s.office ) ) );
+			const R = u && ( u.rooms || [] )[ s.room.i ];
+			if ( R ) { const lite = lvLite && lvLite[ u.key ]; const q = lite && R.rooms_id ? lite[ R.rooms_id ] : null;
+				room.ka = R.name_ka || ( q && q[ 8 ] ) || null;
+				// the sheets' unnamed rooms: "Room N" (levels.js `roomNumber`)
+				const nm = ! R.name && LVL.roomNumber( u, s.room.i );
+				if ( nm ) { room.name = nm.name; room.ka = room.ka || nm.ka; } }
+		}
+		d = { on: true, level: s.level, floor: ml && ml.res ? ml.res : 0, floors: ( meta.levels || [] ).filter( l => l.res ).length,
+			flat: s.flat, office: s.office, room, surface: s.surface, onStair: s.onStair,
+			lift: s.inLift ? { id: s.inLift.id, stops: s.inLift.stops, at: s.inLift.at, to: s.inLift.to, riding: s.inLift.riding } : null,
+			from: bwFrom, waiting: ! bwAllReady( ( s.seesLevels || s.needLevels ).filter( id => id !== 'ROOF' ) )
+				|| ( compiling && compileSince > 0 && performance.now() - compileSince > BW_HOLD_CUE ) };
+	}
+	const key = JSON.stringify( d );
+	if ( ! force && key === bwSaid ) return;
+	bwSaid = key;
+	announce( 'walk', d );
+}
+
+/* The minimap: the storey's own floors from plan_meta, the flat the body is
+ * in picked out, and a dot with the way it is facing - drawn into a canvas
+ * the page hands over (`LP.walkMap = canvas`). The street side at the foot,
+ * as the floor view and the architect's sheets have it. */
+function bwMapDraw( force = false ) {
+	const c = bwMapEl, s = bwS;
+	if ( ! c || ! s || ! bwW || ! bwOn ) return;
+	const N = bwW.nav( s.level );
+	if ( ! N ) return;
+	const key = s.level + '|' + ( s.flat || s.office || '' ) + '|' + c.width + 'x' + c.height;
+	let M = bwMapCache.get( key );
+	if ( ! M ) {
+		const bb = N.bb, W = c.width, H = c.height;
+		const sc = Math.min( ( W - 8 ) / ( bb[ 2 ] - bb[ 0 ] ), ( H - 8 ) / ( bb[ 3 ] - bb[ 1 ] ) );
+		const ox = ( W - ( bb[ 2 ] - bb[ 0 ] ) * sc ) / 2, oy = ( H - ( bb[ 3 ] - bb[ 1 ] ) * sc ) / 2;
+		const P = ( x, y ) => [ ox + ( x - bb[ 0 ] ) * sc, oy + ( y - bb[ 1 ] ) * sc ];
+		const off = document.createElement( 'canvas' ); off.width = W; off.height = H;
+		const g = off.getContext( '2d' );
+		const fillP = ( rings, col ) => {
+			g.fillStyle = col; g.beginPath();
+			for ( const r of rings ) { for ( let i = 0; i < r.length; i += 2 ) { const [ px, py ] = P( r[ i ], r[ i + 1 ] ); i ? g.lineTo( px, py ) : g.moveTo( px, py ); } g.closePath(); }
+			g.fill( 'evenodd' );
+		};
+		const col = { flat: '#e5af69', loggia: '#f0cf9f', corridor: '#f3ede2', hall: '#f3ede2', door: '#f3ede2',
+			half_landing: '#d8d2c6', stair: '#d8d2c6', terrace: '#cfe0c4', commercial: '#e9e4da', street: '#cfcac0',
+			head: '#d8d2c6', lift: '#9aa3ad', sill: '#9aa3ad' };
+		for ( const sf of N.surf ) fillP( sf.P.rings, col[ sf.kind ] || '#ddd' );
+		const mine = N.units.find( u => String( u.n ) === String( s.flat != null ? s.flat : s.office ) && !! u.office === ( s.flat == null ) );
+		if ( mine ) fillP( mine.P.rings, '#1d3559' );
+		M = { off, P, sc };
+		bwMapCache.set( key, M );
+		if ( bwMapCache.size > 24 ) bwMapCache.delete( bwMapCache.keys().next().value );
+	}
+	const g = c.getContext( '2d' );
+	g.clearRect( 0, 0, c.width, c.height );
+	g.drawImage( M.off, 0, 0 );
+	const [ px, py ] = M.P( s.pos.plan[ 0 ], s.pos.plan[ 1 ] );
+	g.fillStyle = '#c8102e'; g.strokeStyle = '#c8102e'; g.lineWidth = 2;
+	g.beginPath(); g.arc( px, py, 4, 0, 7 ); g.fill();
+	g.beginPath(); g.moveTo( px, py ); g.lineTo( px + Math.cos( s.heading ) * 13, py + Math.sin( s.heading ) * 13 ); g.stroke();
+}
+
+/* A thumb on the left half of the window walks (a stick: up is forward),
+ * one on the right half looks - the fly controls' drag. Taken before the fly
+ * controls see the event, and only while walking. */
+function bwTouchWire( dom ) {
+	dom.addEventListener( 'pointerdown', ( e ) => {
+		if ( ! bwOn || e.pointerType !== 'touch' || e.clientX > innerWidth / 2 ) return;
+		bwTouch = { id: e.pointerId, x: e.clientX, y: e.clientY, f: 0, r: 0 };
+		e.stopImmediatePropagation();
+	}, true );
+	dom.addEventListener( 'pointermove', ( e ) => {
+		if ( ! bwTouch || e.pointerId !== bwTouch.id ) return;
+		bwTouch.f = Math.max( - 1, Math.min( 1, - ( e.clientY - bwTouch.y ) / 60 ) );
+		bwTouch.r = Math.max( - 1, Math.min( 1, ( e.clientX - bwTouch.x ) / 60 ) );
+		e.stopImmediatePropagation();
+		invalidate( 2 );
+	}, true );
+	const up = ( e ) => { if ( bwTouch && e.pointerId === bwTouch.id ) bwTouch = null; };
+	addEventListener( 'pointerup', up, true );
+	addEventListener( 'pointercancel', up, true );
+}
+
+/* `#walk-C1` walks in at entrance 1, `#flat-37/walk` walks into flat 37. */
+function bwHash() {
+	const h = decodeURIComponent( location.hash || '' );
+	let m = /^#walk-(C\d|podium)$/i.exec( h );
+	if ( m ) return bwWalk( { portal: m[ 1 ].toUpperCase() === 'PODIUM' ? 'podium' : m[ 1 ].toUpperCase() }, { from: 'street' } );
+	m = /^#flat-(.+)\/walk$/.exec( h );
+	if ( m ) return bwWalkFlat( m[ 1 ] );
+	return null;
+}
+/* A flat by its number: its level opens, and the visitor walks in from its
+ * own front door. */
+function bwWalkFlat( n ) {
+	return LVL.planMeta().then( async ( pm ) => {
+		lvPM = pm;
+		const u = LVL.flatByN( n );
+		if ( ! u ) return false;
+		/* The level first - the floor view, the flat lit on it - and then the
+		 * dive in at its door: from the street that is the way the building
+		 * opens, not a camera flying through its roof. */
+		if ( ! ( sceneNo === 2 && scene2View === 'plan' && lvOpen === u.level ) ) {
+			if ( bwOn ) bwExit( 'none' );
+			lvOpenLevel( u.level, u.n );
+			const t0 = performance.now();
+			while ( performance.now() - t0 < 60000 && ! ( sceneNo === 2 && scene2View === 'plan' && lvOpen === u.level
+				&& ! tweens.length && ! lvWaiting ) ) await nextFrame();
+			if ( ! ( sceneNo === 2 && lvOpen === u.level ) ) return false;
+		}
+		return bwWalk( { flat: u.n }, { from: 'level' } );
+	} );
+}
+
+/* The furniture of one level: web/interior/furn/<LEVEL>.glb + index.json,
+ * fetched once the level itself is in, compiled through the same gate as
+ * the interiors, hidden (every piece at scale 0) until a flat asks for it.
+ * Never awaited by the floor view: a level opens without it, and the hover
+ * furnishes the flat under the pointer from the moment it is here. */
+let lvFurnIdx = null;
+function lvFurnIndex() {
+	if ( ! lvFurnIdx ) lvFurnIdx = fetch( './interior/furn/index.json', { cache: 'no-store' } )
+		.then( r => r.ok ? r.json() : null ).catch( () => null )
+		.then( ( j ) => { if ( ! j ) lvFurnIdx = null; return j; } );
+	return lvFurnIdx;
+}
+function lvFurn( P ) {
+	if ( ! P || P.name === 'cores' ) return Promise.resolve( null );
+	if ( P.furnReady ) return P.furnReady;
+	P.furnState = 'loading';
+	P.furnReady = ( async () => {
+		const T = [ performance.now() ], tick = () => T.push( performance.now() );
+		const ix = await lvFurnIndex();
+		const lv = ix && ix.levels && ix.levels[ P.name ];
+		if ( ! lv ) { P.furnState = 'none'; return null; }
+		// never into a flight: a compile holds the frame loop off
+		for ( let i = 0; i < 400 && tweens.length; i ++ ) await nextFrame();
+		tick();
+		const buf = await LVL.fetchPart( 'furn/' + P.name );
+		tick();
+		if ( P.state === 'gone' ) { P.furnState = 'none'; return null; }
+		const gltf = await new Promise( ( res, rej ) => glbLoader.parse( buf, './', res, rej ) );
+		tick();
+		const holder = new THREE.Group();
+		holder.matrixAutoUpdate = false;
+		holder.matrix.copy( frameP.matrix );
+		holder.add( gltf.scene );
+		const F = LVL.buildFurniture( holder, lv, ( n ) => ( sceneMaterials && sceneMaterials[ n ] ) || null,
+			( miss ) => console.warn( 'unmapped materials in interior/furn/' + P.name + ':', miss ) );
+		if ( P.state === 'gone' ) { P.furnState = 'none'; return null; }
+		tick();
+		P.group.add( F.group );
+		await lvFurnCompile( P, F );
+		tick();
+		P.furn = F;
+		P.furnAll = 0;
+		P.furnSolids = furnitureSolids( lv, ( p ) => F.heights.get( p.node ) );
+		if ( bwW ) {
+			const r = bwW.solids( P.name, P.furnSolids );
+			if ( r && r.dropped.length ) console.info( 'furniture ' + P.name + ': ' + r.dropped.length + ' pieces in a doorway are not solid' );
+		}
+		P.furnState = 'in';
+		console.info( 'furniture ' + P.name + ': ' + F.pieces + ' pieces, ' + Math.round( F.tris ) + ' triangles placed, '
+			+ F.instanced.children.length + ' piece meshes, ' + F.reps.length + ' kinds (' + F.welded().children.length + ' welded, for a walk); ms wait/fetch/parse/build/compile '
+			+ T.slice( 1 ).map( ( t, i ) => Math.round( t - T[ i ] ) ).join( '/' ) );
+		lvFurnSync( P );
+		return F;
+	} )();
+	P.furnReady.catch( ( e ) => { console.warn( 'furniture ' + P.name + ' did not load:', e ); P.furnState = 'none'; } );
+	return P.furnReady;
+}
+const lvFurnWarmed = new Set();
+const lvFurnWalked = new Set();
+/* One piece per shader, not one per (geometry, material). Every input of
+ * three's state and pipeline keys that differs between pieces is here: the
+ * material, the attribute layout (name, size, normalised, interleave, array
+ * type) and a mirrored matrix (front face). receiveShadow, the clipping
+ * context and the absence of morphs are the same for every piece. 788 kinds
+ * on L06 are 32 shaders; warming them all was ~69 loop-held lots, ~3 s.
+ * `?furnwarm=all` warms every kind, as before. */
+const FURN_WARM_ALL = __q.get( 'furnwarm' ) === 'all';
+/* Pieces compiled per loop-held lot. With one piece per shader every piece
+ * in a lot is a new shader build (~35 ms of WGSL each), so a dozen was a
+ * 450 ms frozen frame; with every kind, most of a dozen were repeats. */
+const FURN_LOT = + ( __q.get( 'furnlot' ) || ( FURN_WARM_ALL ? 12 : 4 ) );
+function furnWarmSet( reps ) {
+	if ( FURN_WARM_ALL ) return reps;
+	const seen = new Map();
+	for ( const o of reps ) {
+		const g = o.geometry;
+		let k = o.material.uuid + '|' + ( o.matrix.determinant() < 0 ? 'cw' : 'ccw' );
+		for ( const n of Object.keys( g.attributes ).sort() ) {
+			const a = g.attributes[ n ];
+			k += '|' + n + ',' + a.itemSize + ',' + ( a.normalized ? 'n' : '' ) + ',' + ( a.data ? a.data.stride + ':' + a.offset : '' )
+				+ ',' + ( a.array && a.array.constructor.name );
+		}
+		if ( Object.keys( g.morphAttributes ).length ) k += '|' + g.uuid;
+		if ( ! seen.has( k ) ) seen.set( k, o );
+	}
+	return [ ...seen.values() ];
+}
+function lvFurnCompile( P, F ) {
+	/* On a walk only the welded variant is wanted, and it is built the walk's
+	 * way (`lvWarmWalk`); the floor view's instanced one is built behind the
+	 * gate the first time a floor view needs it. */
+	if ( bwOn && BW_ASYNC && PIPES ) {
+		const W = F.welded();
+		const mats = new Set( W.children.filter( o => o.isMesh ).map( o => o.material )
+			.concat( [ ...W.userData.keepInst ] ) );
+		let gWas = false, capWas = false;
+		return lvWarmWalk( P, () => {
+			gWas = P.group.visible;
+			if ( P.cap ) { capWas = P.cap.visible; P.cap.visible = false; }
+			P.group.visible = true;
+			F.walk( true );
+		}, () => {
+			// the level as the walk had it; `lvFurnSync` puts the pieces right once it is 'in'
+			if ( ! ( bwOn && bwShown.has( P.name ) ) ) { F.walk( false ); F.all( 0 ); P.group.visible = gWas; }
+			if ( P.cap ) P.cap.visible = capWas;
+		}, mats, lvFurnWalked );
+	}
+	const job = lvWarm.then( async () => {
+		/* Both ways it is drawn - instanced in the floor view, welded on a
+		 * walk - are pipelines of their own; both are built here, behind the
+		 * gate, so neither is a first draw in front of a visitor. */
+		const W = F.welded();
+		const mats = new Set( F.instanced.children.map( o => o.material ) );
+		const key = ( m ) => m.uuid;
+		if ( ! [ ...mats ].every( m => lvFurnWarmed.has( key( m ) ) ) ) {
+			/* A dozen meshes at a time with a frame let through between the
+			 * batches: all of it at once is 4-6 s with the frame loop held,
+			 * and this runs behind a street the visitor is looking at. */
+			W.visible = true;
+			const kids = [ ...furnWarmSet( F.reps ), ...W.children ], was = kids.map( o => o.visible );
+			for ( const o of kids ) o.visible = false;
+			try {
+				for ( let i = 0; i < kids.length; i += FURN_LOT ) {
+					const lot = kids.slice( i, i + FURN_LOT );
+					for ( const o of lot ) o.visible = true;
+					await compileInto( prePass, [ lvRoot ], P.group );
+					await compileInto( scenePass, [ lvRoot ], P.group );
+					for ( const o of lot ) o.visible = false;
+					if ( i + FURN_LOT < kids.length ) await nextFrame();
+				}
+			}
+			finally {
+				W.visible = false;
+				kids.forEach( ( o, i ) => { o.visible = was[ i ]; } );
+			}
+			for ( const m of mats ) lvFurnWarmed.add( key( m ) );
+		}
+	} );
+	lvWarm = job.catch( () => {} );
+	return job;
+}
+/* A level's furniture as the view wants it: all of it while walking, else
+ * the floor view's dials - the hovered and the open flat, and no other. */
+function lvFurnSync( P ) {
+	const F = P && P.furn;
+	if ( ! F ) return;
+	if ( bwOn && bwShown.has( P.name ) ) { if ( F.walk( true ) ) shadowDirty(); P.furnAll = 1; invalidate( 2 ); return; }
+	F.walk( false );
+	F.all( 0 );
+	P.furnAll = 0;
+	const L = lvLevel( P.name );
+	if ( L && lvOpen === P.name && sceneNo === 2 )
+		for ( let k = 1; k <= Math.min( L.units.length, LVL.MAX_UNITS - 1 ); k ++ )
+			if ( lvRev[ k ] > 0 ) F.reveal( L.units[ k - 1 ].token, lvRev[ k ] );
+	shadowDirty();
+	invalidate( 2 );
+}
+
 function initEmbed() {
 
 	controls.enableZoom = false;          // the wheel belongs to the page
@@ -2947,12 +5445,36 @@ function initEmbed() {
 		 * letting go of a drag they used to look round the room, and the
 		 * ray would land on the plan of whatever flat happens to lie
 		 * under the wall they are facing. */
+		if ( FLAT_GONE && slid <= 5 && ! tweens.length && planDragOwns() && roomFocus < 0 ) {
+			const k = lvUnitUnder( [ e.clientX, e.clientY ] );
+			if ( k !== lvFocusK ) lvFocus( lvUnit( k ) );
+			return;
+		}
 		if ( slid <= 5 && ! tweens.length && planDragOwns() && roomFocus < 0 ) {
 			const u = planUnitUnder( [ e.clientX, e.clientY ] );
 			if ( u !== planFocus ) planFocusSet( u );
 			return;
 		}
 		if ( slid > 5 || sceneNo !== 1 || tweens.length ) return;
+		/* The real building: the level that is lit, else whatever band the
+		 * click itself lands on - and through the gate, never onto a level
+		 * that is not here yet. A click on the building that lands on no
+		 * storey (the podium, the roof) opens the show flat, as it opened
+		 * the tour before. */
+		if ( FLAT_GONE ) {
+			/* A street door: the camera walks up to it and the visitor is
+			 * on foot from there. */
+			const door = bwHot || bwDoorUnder( [ e.clientX, e.clientY ] );
+			if ( door ) { bwWalk( { portal: door }, { from: 'street' } ); return; }
+			const id = lvHotLevel || lvBandUnder( [ e.clientX, e.clientY ] );
+			if ( id ) { lvOpenLevel( id ); return; }
+			const r = dom.getBoundingClientRect();
+			ndc.set( ( e.clientX - r.left ) / r.width * 2 - 1, - ( ( e.clientY - r.top ) / r.height ) * 2 + 1 );
+			ray.setFromCamera( ndc, camera );
+			if ( ray.intersectObjects( [ groups.main, groups.tower ].filter( Boolean ), true )
+				.some( h => h.object.isMesh && h.object.visible ) ) setScene( 2 );
+			return;
+		}
 		/* The storey that was LIT, not a fresh cast. `floorHot` is what the
 		 * amber band and the hover card are both showing; casting again here
 		 * asks the question a second time, against a camera that has moved
@@ -2978,6 +5500,8 @@ function initEmbed() {
 	} );
 
 	buildFloorMap();
+	lvBuildBands();
+	bwBuildDoors();
 	// ...and not here: the page opens on the street, where the shot is the
 	// solved one and nobody is allowed to drag it off. `flyApply` decides.
 	flyApply();
@@ -3059,6 +5583,8 @@ function initEmbed() {
 			hold: Math.round( railHoldUntil - performance.now() ),
 			offRail: + camera.position.distanceToSquared( railPose( railT ).p ).toFixed( 4 ) }; },
 	};
+	// ...and the real building's levels, over the old members of the same names
+	if ( FLAT_GONE ) lvInstallApi( window.LP );
 
 }
 
@@ -3151,7 +5677,7 @@ function buildPipeline() {
 	).mul( 43758.5453 ) );
 
 	const graded = img.rgb
-		.mul( mix( float( 1.0 ), vign, gradeAmount ) )
+		.mul( mix( float( 1.0 ), vign, gradeAmount.mul( vignAmount ) ) )
 		.add( grain.sub( 0.5 ).mul( 0.013 ).mul( gradeAmount ) );
 
 	pipeline.outputNode = vec4( graded, 1.0 );
@@ -3315,7 +5841,8 @@ function wireUI() {
 	[ 'hero', 'orbit', 'fly' ].forEach( k =>
 		$( 'm_' + k ).addEventListener( 'click', () => setMode( k ) ) );
 	$( 's_1' ).addEventListener( 'click', () => setScene( 1 ) );
-	$( 's_2' ).addEventListener( 'click', () => withFlat( () => setScene( 2 ) ) );
+	// the real building's scene 2 has its own gate (`lvWith`)
+	$( 's_2' ).addEventListener( 'click', () => FLAT_GONE ? setScene( 2 ) : withFlat( () => setScene( 2 ) ) );
 	$( 'm_top' ).addEventListener( 'click', () => setMode( 'top' ) );
 	$( 'm_row' ).addEventListener( 'click', () => setMode( 'row' ) );
 	on( 't_plan', v => setPlan( v ) );
@@ -3399,8 +5926,24 @@ function makeFlyControls( cam, dom, opts = null ) {
 		yaw = euler.y; pitch = euler.x;
 	};
 
+	/* `opts.freeLook`: while it holds (a visitor walking), one click in the
+	 * frame takes the pointer - Pointer Lock - and the view follows the
+	 * mouse with no button held, as in any first-person walk (user,
+	 * 2026-11-25: "when I walk I shouldn't have to hold to turn"). Esc gives
+	 * the cursor back for the page's buttons; the next click takes it again.
+	 * A pen or a finger keeps the drag. */
+	const freeLook = () => !! ( opts && opts.freeLook && opts.freeLook() );
+	const locked = () => document.pointerLockElement === dom;
+	const LOCK_RATE = 0.0022;          // radians per mouse count
 	const down = ( e ) => {
 		if ( ! enabled || e.button !== 0 ) return;
+		if ( e.pointerType === 'mouse' && freeLook() ) {
+			if ( ! locked() && dom.requestPointerLock ) {
+				const r = dom.requestPointerLock();
+				if ( r && r.catch ) r.catch( () => {} );
+			}
+			if ( locked() || dom.requestPointerLock ) return;
+		}
 		/* ...and somebody else may want the drag. Looking straight down at
 		 * a plan, turning the camera on the spot is not what a pointer
 		 * dragged across it means - sliding the storey along is - so the
@@ -3410,6 +5953,14 @@ function makeFlyControls( cam, dom, opts = null ) {
 		dom.setPointerCapture( e.pointerId );
 	};
 	const move = ( e ) => {
+		if ( locked() ) {
+			if ( ! enabled ) return;
+			yaw -= ( e.movementX || 0 ) * LOCK_RATE;
+			pitch -= ( e.movementY || 0 ) * LOCK_RATE;
+			pitch = Math.max( - 1.45, Math.min( 1.45, pitch ) );
+			cam.quaternion.setFromEuler( euler.set( pitch, yaw, 0, 'YXZ' ) );
+			return;
+		}
 		if ( ! dragging ) return;
 		yaw -= ( e.clientX - px ) * 0.0026;
 		pitch -= ( e.clientY - py ) * 0.0026;
@@ -3452,6 +6003,8 @@ function makeFlyControls( cam, dom, opts = null ) {
 		 * over it - has to read the two angles the drag is holding. */
 		get look() { return { yaw, pitch }; },
 		update( dt ) {
+			// the walk is over (or the controls handed off): give the pointer back
+			if ( locked() && ( ! enabled || ! freeLook() ) ) document.exitPointerLock();
 			if ( ! enabled ) return;
 			const shift = keys.has( 'ShiftLeft' ) || keys.has( 'ShiftRight' );
 			const fast = shift ? 3.4 : 1;
@@ -3467,7 +6020,7 @@ function makeFlyControls( cam, dom, opts = null ) {
 			 * the camera ends up - including the height, which is why
 			 * space and C go nowhere in there: a visitor standing in a
 			 * bedroom cannot rise through the ceiling. */
-			if ( opts && opts.walk && opts.walk( dt, f, r, shift ) ) { dolly = 0; return; }
+			if ( opts && opts.walk && opts.walk( dt, f, r, shift, keys ) ) { dolly = 0; return; }
 			if ( f ) { cam.getWorldDirection( dir ); cam.position.addScaledVector( dir, f * s ); }
 			if ( r ) {
 				cam.getWorldDirection( dir );
@@ -3490,11 +6043,21 @@ function tween( dur, delay, update, done ) {
 	tweens.push( { t0: null, dur, delay, update, done } );
 }
 
+/* A compile holds the frame loop (see `compileInto`): the picture stands
+ * still, and a flight that went on in the meantime would come back a jump
+ * further on. So on a walk (the walk up to a street door, a room dive) the
+ * time a compile holds is not flight time - every tween already under way
+ * has its start moved on by it, and the flight resumes from the frame the
+ * visitor last saw. Off a walk the timing is as it always was. */
+let tweenAt = 0;
 function updateTweens() {
 	const now = performance.now();
+	const held = compiling && bwOn && tweenAt ? now - tweenAt : 0;
+	tweenAt = now;
 	for ( let i = tweens.length - 1; i >= 0; i -- ) {
 		const tw = tweens[ i ];
 		if ( tw.t0 === null ) tw.t0 = now;
+		else if ( held ) tw.t0 += held;
 		const t = Math.min( 1, Math.max( 0, ( now - tw.t0 - tw.delay ) / tw.dur ) );
 		tw.update( t );
 		if ( t >= 1 ) { tweens.splice( i, 1 ); if ( tw.done ) tw.done(); }
@@ -3583,6 +6146,13 @@ const FLOOR_IN = 1200;
 let sceneSettling = false;
 
 function setScene( n, animate = true, floor = topFloor(), view = 'hero' ) {
+	/* Scene 2 is the real building's levels now - see `lvSetScene`. Only a
+	 * street that is already the street falls through to the old path,
+	 * which is what settles the boot's first `setScene( 1 )`. */
+	if ( FLAT_GONE ) {
+		const r = lvSetScene( n, animate, floor, view );
+		if ( r !== null || n === 2 ) return r;
+	}
 	sceneSettling = true;
 	try { return setSceneNow( n, animate, floor, view ); }
 	/* ...and whoever has the camera is settled here rather than left to
@@ -3798,7 +6368,55 @@ function flatFrame() {
 }
 
 function orbitTarget() {
-	return sceneNo === 2 ? flatFrame().c : new THREE.Vector3( 10, 17, -95 );
+	if ( FLAT_GONE && sceneNo === 2 && lvOpen ) return lvCenter();
+	return sceneNo === 2 ? flatFrame().c : siteCenter();
+}
+
+/* The middle of the real building in world metres (scene_meta.site.center,
+ * written by the build) - the street's orbit target and fly bound. The old
+ * block A's middle is only the fallback for a page with no meta. */
+function siteCenter() {
+	const c = meta && meta.site && meta.site.center;
+	return c ? new THREE.Vector3( c[ 0 ], c[ 1 ], c[ 2 ] ) : new THREE.Vector3( 10, 17, -95 );
+}
+
+/* The opening shot of the real building, from scene_meta.site.hero (world
+ * metres): a level camera turned to the target's bearing, and the rise of a
+ * shift lens that puts the target on the frame's centre line, so verticals
+ * stay vertical as they do in the architect's renders. Null with no meta. */
+/* `?hero=<name>`: one of the opening shots the exterior review proposed
+ * (scene_meta.site.hero_candidates - square_9m, front_eye, sw_corner_eye),
+ * so the owner can compare them live against the rail. Exactly as that
+ * report specifies: the candidate's eye and aim, a vertical field of view
+ * of 2 atan( tan( hfov / 2 ) / aspect ) so `hfov` is held across the frame,
+ * and its own lens shift and pan; on the page the rail sweeps about that
+ * pose. The default (no `?hero=`) is untouched. */
+const HERO_PICK = __q.get( 'hero' );
+function heroCand() {
+	const c = HERO_PICK && meta && meta.site && meta.site.hero_candidates && meta.site.hero_candidates[ HERO_PICK ];
+	return c || null;
+}
+const candFov = ( c ) => 2 * Math.atan( Math.tan( c.hfov * Math.PI / 360 ) / frameAspect() ) * 180 / Math.PI;
+function metaHero() {
+	const hc = heroCand();
+	if ( hc ) {
+		const p = new THREE.Vector3( ...hc.eye ), at = new THREE.Vector3( ...hc.at );
+		const tmp = new THREE.PerspectiveCamera();
+		tmp.position.copy( p );
+		tmp.lookAt( at.x, p.y, at.z );
+		return { p, q: tmp.quaternion.clone(), fov: candFov( hc ), shift: hc.shift, pan: hc.pan, target: at };
+	}
+	const h = meta && meta.site && meta.site.hero;
+	if ( ! h ) return null;
+	const p = new THREE.Vector3( ...h.eye ), at = new THREE.Vector3( ...h.at );
+	const tmp = new THREE.PerspectiveCamera();
+	tmp.position.copy( p );
+	tmp.lookAt( at.x, p.y, at.z );
+	const run = Math.hypot( at.x - p.x, at.z - p.z );
+	// ...and a fifth of the frame more, so the target sits above the middle
+	// and the sky - not the foreground - takes the spare height
+	const shift = Math.max( 0, Math.min( 1, ( at.y - p.y ) / run / Math.tan( FOV_Y * Math.PI / 360 ) + 0.2 ) );
+	return { p, q: tmp.quaternion.clone(), fov: FOV_Y, shift, target: at };
 }
 
 /* `keepRail` is only for the flight back to the street. See `resetShot`. */
@@ -3822,7 +6440,7 @@ function flyApply() {
 	if ( ! fly ) return;
 	fly.enabled = EMBED
 		? ( mode !== 'orbit' && sceneNo !== 1 )
-		: ( mode === 'fly' || ( mode === 'hero' && roomFocus >= 0 ) );
+		: ( mode === 'fly' || ( mode === 'hero' && roomFocus >= 0 ) || bwOn );
 	embedCursor( false );
 }
 
@@ -3833,9 +6451,11 @@ function flyApply() {
 let cursorSaid = '';
 function embedCursor( grabbing ) {
 	if ( ! EMBED || ! renderer ) return;
-	const want = ( fly && fly.enabled )
+	/* ...and `progress` while a clicked level is still on its way: the click
+	 * has been taken, the level is not on screen until it is here. */
+	const want = lvWaiting ? 'progress' : ( fly && fly.enabled )
 		? ( grabbing ? 'grabbing' : 'grab' )
-		: ( floorHot ? 'pointer' : 'default' );
+		: ( ( floorHot || lvHotLevel || bwHot ) ? 'pointer' : 'default' );
 	if ( want === cursorSaid ) return;
 	cursorSaid = want;
 	renderer.domElement.style.cursor = want;
@@ -3909,6 +6529,8 @@ function heroPose() {
 		const q = railPose( railT );
 		return Object.assign( q, railLens( q.p, q.q ) );
 	}
+	const mh = metaHero();
+	if ( mh ) return mh;
 	const p = new THREE.Vector3( 0, EYE, - HERO_PUSH );
 	const tmp = new THREE.PerspectiveCamera();
 	tmp.position.copy( p );
@@ -3960,7 +6582,8 @@ const RAIL_PIN_Y = + ( __q.get( 'pin' ) ?? 0.26 );
 /* ...and where across the window that corner stands, as a fraction of the
  * width. Pinning it is what keeps the gap between the type and the building
  * the same all the way round: the camera orbits, the composition does not. */
-const RAIL_PIN_X = + ( __q.get( 'pinx' ) ?? 0.52 );
+/* 0.52 -> 0.46 (user, 2026-11-25: "move the building a little left"). */
+const RAIL_PIN_X = + ( __q.get( 'pinx' ) ?? 0.46 );
 const RAIL_PAUSE = 1200;     // ms held still at each end - and at full size
 const RAIL_IDLE = 9000;      // ms after a drag before it picks up again
 const RAIL_REJOIN = 2600;    // ms easing back onto the rail
@@ -4013,6 +6636,14 @@ function railAim( p, out ) {
 }
 
 function railPin() {
+	const hc = heroCand();
+	if ( hc ) {
+		camera.fov = candFov( hc );
+		camera.lensShift = hc.shift;
+		camera.lensPan = hc.pan;
+		camera.updateProjectionMatrix();
+		return;
+	}
 	const c = meta && meta.block && meta.block.corner;
 	if ( ! c ) return;
 	camera.lensShift = 0;
@@ -4035,6 +6666,8 @@ function railPin() {
  * dropped on it in the frame it lands. Same arithmetic, on a stand-in. */
 const _plcam = new THREE.PerspectiveCamera();
 function railLens( p, q ) {
+	const hc = heroCand();
+	if ( hc ) return { shift: hc.shift, pan: hc.pan };
 	const c = meta && meta.block && meta.block.corner;
 	if ( ! c ) return { shift: HERO_SHIFT, pan: 0 };
 	_plcam.position.copy( p );
@@ -4066,6 +6699,12 @@ function railOrbit() {
 	const C = new THREE.Vector3( c[ 0 ], c[ 1 ], c[ 2 ] );
 	const ang = ( p ) => Math.atan2( p.z - C.z, p.x - C.x );
 	const rad = ( p ) => Math.hypot( p.x - C.x, p.z - C.z );
+	/* The real building's two ends of the sweep come with it, from
+	 * scene_meta.site.rail (the build writes them from the plan); RAIL_A/B
+	 * were flown round the old photo-fitted block and only stand in when
+	 * there is no meta. */
+	const mr = meta && meta.site && meta.site.rail;
+	if ( mr ) { _rA.set( ...mr.a ); _rB.set( ...mr.b ); }
 	let a0 = ang( _rA ), a1 = ang( _rB );
 	while ( a1 - a0 > Math.PI ) a1 -= 2 * Math.PI;      // the short way round
 	while ( a0 - a1 > Math.PI ) a1 += 2 * Math.PI;
@@ -4078,6 +6717,22 @@ function railOrbit() {
 function railPose( t ) {
 	const e = smoother( Math.min( 1, Math.max( 0, t ) ) ), u = 1 - e;
 	const orb = railOrbit();
+	const hc = heroCand();
+	if ( hc && orb ) {
+		/* The rail's own sweep - the same arc, the same seconds - turned so
+		 * its middle is the candidate's eye: eye and aim both swing about
+		 * the building's middle, the candidate's height and lens held. */
+		const a = ( e - 0.5 ) * ( orb.a1 - orb.a0 ), ca = Math.cos( a ), sa = Math.sin( a );
+		const rot = ( v, out ) => {
+			const dx = v[ 0 ] - orb.C.x, dz = v[ 2 ] - orb.C.z;
+			return out.set( orb.C.x + dx * ca - dz * sa, v[ 1 ], orb.C.z + dx * sa + dz * ca );
+		};
+		rot( hc.eye, _rp ); rot( hc.at, _rt );
+		_rcam.position.copy( _rp );
+		_rcam.up.set( 0, 1, 0 );
+		_rcam.lookAt( _rt.x, _rp.y, _rt.z );
+		return { p: _rp.clone(), q: _rcam.quaternion.clone(), fov: candFov( hc ), shift: hc.shift, target: _rt.clone() };
+	}
 	if ( orb ) {
 		const a = orb.a0 + ( orb.a1 - orb.a0 ) * e;
 		_rp.set( orb.C.x + Math.cos( a ) * orb.r,
@@ -4241,15 +6896,30 @@ const PLAN_SILL = 3;              // ...and the hair it sits under the cards' li
  * anything else - not the scale, and not the stops the arrows walk, which
  * are read along the frame's right. */
 const PLAN_NUDGE = 6;
-function planFrame() {
-	const { ex, ey } = flatFrame();
-	const f = meta && meta.flat;
-	const b = meta && meta.block && meta.block.floors;
-	const len = ( f && f.row ) ? f.row.end : ( f ? f.size[ 0 ] : 11.5 );
-	const depth = b ? b.depth : ( f ? f.size[ 1 ] : 8.4 );
-	const o = new THREE.Vector3( ...( f ? f.origin : [ 0, 32, 0 ] ) );
-	o.y += floorDrop();
-	const t = o.clone().addScaledVector( ex, len * 0.5 ).addScaledVector( ey, depth * 0.5 );
+/* `B` is the plate as a box in its own plan metres - { o (world, on the
+ * floor), ex, ey, x0, x1, y0, y1 } - which the real building's levels give
+ * (`lvFrameBox`); without one it is the old row, from `meta.flat`. With
+ * `fitClear` the WHOLE plate is fitted into the part of the window the
+ * page's cards leave clear, rather than run off the right for the arrows
+ * to walk: one level of the real building is one L-shaped plate, and the
+ * question a click on a storey asks is answered by all of it at once. */
+function planFrame( B = ( FLAT_GONE && lvOpen ) ? lvFrameBox() : null ) {
+	let ex, ey, o, x0, x1, y0, y1;
+	if ( B ) {
+		( { ex, ey, o, x0, x1, y0, y1 } = B );
+		o = o.clone();
+	} else {
+		( { ex, ey } = flatFrame() );
+		const f = meta && meta.flat;
+		const b = meta && meta.block && meta.block.floors;
+		x0 = 0; y0 = 0;
+		x1 = ( f && f.row ) ? f.row.end : ( f ? f.size[ 0 ] : 11.5 );
+		y1 = b ? b.depth : ( f ? f.size[ 1 ] : 8.4 );
+		o = new THREE.Vector3( ...( f ? f.origin : [ 0, 32, 0 ] ) );
+		o.y += floorDrop();
+	}
+	const len = x1 - x0, depth = y1 - y0;
+	const t = o.clone().addScaledVector( ex, ( x0 + x1 ) * 0.5 ).addScaledVector( ey, ( y0 + y1 ) * 0.5 );
 	const ar = frameAspect();
 	const fov = 32;                       // long enough that the ends of the
 	                                      // block do not splay in the corners
@@ -4263,7 +6933,7 @@ function planFrame() {
 	const right = new THREE.Vector3( - up.z, 0, up.x );
 	const d = new THREE.Vector3();
 	let halfH = 0, halfW = 0, loW = Infinity;
-	for ( const [ a, c ] of [ [ 0, 0 ], [ len, 0 ], [ 0, depth ], [ len, depth ] ] ) {
+	for ( const [ a, c ] of [ [ x0, y0 ], [ x1, y0 ], [ x0, y1 ], [ x1, y1 ] ] ) {
 		d.copy( o ).addScaledVector( ex, a ).addScaledVector( ey, c ).sub( t );
 		halfH = Math.max( halfH, Math.abs( d.dot( up ) ) );
 		halfW = Math.max( halfW, Math.abs( d.dot( right ) ) );
@@ -4284,6 +6954,11 @@ function planFrame() {
 	 * texture; the margin is what lets it read as a cut-away object sitting
 	 * IN the frame. */
 	let h = Math.max( halfH, halfW / ar ) / tan * PLAN_FIT;
+	/* ...or, for the whole plate, its width into what the cards leave. */
+	if ( B && B.fitClear ) {
+		const cw = Math.max( fw * 0.4, fw - Math.max( 0, Math.min( uiInset, fw * 0.55 ) ) );
+		h = Math.max( h, halfW / ( ar * cw / fw ) / tan * PLAN_FIT );
+	}
 	/* ...and once the page has said where its cards begin, the storey's
 	 * DEPTH is fitted to the strip between that line and the foot of the
 	 * window rather than to the whole window, so the near wall stands clear
@@ -4384,7 +7059,9 @@ let planTween = null;
  * row runs out and the window would fill with roof. */
 function planStops() {
 	const F = planFrame();
-	const starts = ( meta && meta.flat && meta.flat.row && meta.flat.row.starts ) || [ 0 ];
+	// the real building's plate is fitted whole: no row to walk
+	const starts = FLAT_GONE ? [ 0 ]
+		: ( ( meta && meta.flat && meta.flat.row && meta.flat.row.starts ) || [ 0 ] );
 	const d = new THREE.Vector3();
 	/* Each unit's near edge, as metres right of the plan's own left edge -
 	 * which is what a pan of that many metres brings flush with the cards.
@@ -4508,7 +7185,7 @@ const planDragOwns = () => sceneNo === 2 && scene2View === 'plan';
  * keep their hands off the drag, but the row no longer slides and the
  * arrows no longer step - the camera is parked on one unit and the only
  * way out is a click. */
-const planPanOwns = () => planDragOwns() && planFocus < 0;
+const planPanOwns = () => planDragOwns() && planFocus < 0 && ! lvFocusK;
 
 /* How far the row can go, and the rubber band past it. */
 function planLimit() {
@@ -4639,6 +7316,7 @@ function planStepReset() {
  * a resize, the page changing how much of the window it covers - lands on
  * whichever of the two shots the view is actually on. */
 function planShot() {
+	if ( FLAT_GONE ) return lvShot();
 	// ...and a fourth: once a visitor has walked into a room, that is the
 	// shot the floor view is on, and a resize has to put them back in it
 	if ( roomFocus >= 0 ) return roomShot();
@@ -4723,14 +7401,16 @@ function planUnitBox( unit ) {
  * than to the line the cards start on - there is nothing beside it to line
  * up with, and holding it under that line threw away a third of the height
  * it could have had. */
-function planFocusPose( unit ) {
-	const box = planUnitBox( unit );
+/* `LV` = { box, F, head } frames a box of the real building's plate - one
+ * flat's polygon and its loggias - with everything below unchanged. */
+function planFocusPose( unit, LV = null ) {
+	const box = LV ? LV.box : planUnitBox( unit );
 	if ( ! box ) return planPose();
-	const F = planFrame();
+	const F = LV ? LV.F : planFrame();
 	const { ex, ey, o, up, fov, tan, ar, fw } = F;
 	const fh = frameEl.clientHeight || 1;
 	const b = meta && meta.block && meta.block.floors;
-	const head = ( ( b && b.h ) || 3 ) - 0.2;     // the storey's own clear height
+	const head = LV ? LV.head : ( ( b && b.h ) || 3 ) - 0.2;     // the storey's own clear height
 
 	/* The unit as a BOX, floor to ceiling - eight corners, not four. Seen
 	 * from an angle a rectangle draws as a hexagon and its footprint says
@@ -4764,7 +7444,12 @@ function planFocusPose( unit ) {
 	 * balconies are on, and the side the show flat's own shot looks from.
 	 * The back line pays a wall's worth of its near edge for it, about a
 	 * metre and a half, which is the corridor side of the plan. */
-	const lean = - Math.sign( ey.dot( up ) ) || - 1;
+	/* ...and the real building's plan frame runs the other way: its +y is
+	 * TOWARDS the street (CONTRACT.md "Frames"), where the old block's ey
+	 * ran away from it - so the same street lean is the opposite sign. Got
+	 * wrong, the camera sat over the courtyard looking back into the sun
+	 * and every sunlit parquet floor came out as a blown highlight. */
+	const lean = ( LV ? 1 : - 1 ) * Math.sign( ey.dot( up ) ) || - 1;
 	const th = FOCUS_TILT * Math.PI / 180;
 	const dir = new THREE.Vector3( 0, Math.cos( th ), 0 )
 		.addScaledVector( up, Math.sin( th ) * lean ).normalize();
@@ -5392,6 +8077,7 @@ function roomShellSet( unit ) {
  * dive, so it comes on halfway down the move: there the ceiling is edge on
  * to a camera passing through it and nobody sees it arrive. */
 function roomShellStep() {
+	if ( FLAT_GONE ) return lvInsideStep();
 	const want = roomFocus >= 0 && !! roomShell
 		&& camera.position.y < roomCeilingY() - 0.02;
 	if ( want === roomShellOn ) return;
@@ -5656,6 +8342,7 @@ function roomTell( force = false ) {
 const _rq = new THREE.Vector3();
 let roomDotSaid = '';
 function roomDotTell( force = false ) {
+	if ( FLAT_GONE ) return lvRoomDotTell( force );
 	const f = meta && meta.flat;
 	const live = planDragOwns() && planFocus >= 0 && roomFocus < 0 && !! f;
 	if ( ! live ) {
@@ -6328,7 +9015,8 @@ function walkPlace() {
 
 /* The frame, when a visitor has the flat on foot. Returns true to tell the
  * fly controls it has taken their three axes off them. */
-function walkStep( dt, f, r, fast ) {
+function walkStep( dt, f, r, fast, keys ) {
+	if ( bwOn ) return bwStep( dt, f, r, fast, keys );
 	if ( ! walkOn ) return false;
 	// the doors have already moved this frame; anything they swept into
 	// gets out of the way before the keys are read
@@ -6391,6 +9079,10 @@ function walkStep( dt, f, r, fast ) {
  * so the first walking frame is exactly the frame the flight ended on and
  * nothing pops as the keys are handed over. */
 function walkEnter() {
+	/* The real building is walked by the walk module (web/walk.js), which
+	 * hangs off `LVL.hooks` - `onRoom` says the camera has landed in a room,
+	 * `shown()` / `groupOf()` hand it the level. Nothing to do here. */
+	if ( FLAT_GONE ) { walkOn = false; if ( bwOn ) bwLanded(); else bwFromRoom(); return; }
 	if ( roomFocus < 0 || planFocus < 0 ) { walkOn = false; return; }
 	/* The floor plan is rasterised HERE, on the frame the dive lands,
 	 * rather than on the frame it starts. It is a tenth of a second of
@@ -6893,7 +9585,7 @@ function planUnitUnder( px ) {
  * Eight flats and the storey itself, all run off the frame loop rather
  * than the tween list - a tween in flight pauses the hero's rail, and
  * these have to be able to run while the camera is still flying in. */
-const planDrawOwns = () => PLAN2D && ! DEV && !! groups.flat
+const planDrawOwns = () => PLAN2D && ! DEV && !! groups.flat && ! FLAT_GONE
 	&& sceneNo === 2 && scene2View === 'plan';
 let planAmt = 0, planHold = 0, planHot = - 1, planDimAmt = 0;
 /* How far each flat is furnished, and the plain SECONDS under it.
@@ -6976,6 +9668,7 @@ function planBadgeTell( force = false ) {
  * flag the street's storey hover is asked off, because the answer changes
  * when the plan SLIDES as well as when the pointer moves. */
 function planHoverTest() {
+	if ( FLAT_GONE ) return lvHoverTest();
 	if ( ! planDrawOwns() ) return;
 	// pinned to the open flat: see `planFocusSet`
 	if ( planFocus >= 0 ) return;
@@ -7223,7 +9916,8 @@ let uiFoot = 0;
 const planUp = new THREE.Vector3( 0, 0, -1 );
 
 function setPlanUp() {
-	const { ey } = flatFrame();
+	// the real building's plate lies along the plan's own x: up is its y
+	const ey = ( FLAT_GONE && frameP ) ? frameP.ey : flatFrame().ey;
 	const look = new THREE.Vector3();
 	camera.updateMatrixWorld();
 	camera.getWorldDirection( look );
@@ -7233,7 +9927,7 @@ function setPlanUp() {
 }
 
 function resetShot( keepRail = false ) {
-	if ( sceneNo === 2 ) return scene2View === 'plan' ? planShot() : flatShot();
+	if ( sceneNo === 2 ) return bwOn ? bwPlace( bwS ) : scene2View === 'plan' ? planShot() : flatShot();
 	if ( railOn() ) {
 		/* Reset means the start of the sweep, running - EXCEPT for the
 		 * camera that has just been flown back down to the street. That
@@ -7255,6 +9949,19 @@ function resetShot( keepRail = false ) {
 		camera.updateProjectionMatrix();
 		railPin();
 		if ( controls ) controls.target.copy( q.target );
+		return;
+	}
+	const mh = metaHero();
+	if ( mh ) {
+		camera.position.copy( mh.p );
+		camera.quaternion.copy( mh.q );
+		camera.up.set( 0, 1, 0 );
+		camera.fov = mh.fov;                    // FOV_Y, or a ?hero= candidate's
+		camera.aspect = frameAspect();
+		camera.lensShift = mh.shift;
+		if ( mh.pan !== undefined ) camera.lensPan = mh.pan;
+		camera.updateProjectionMatrix();
+		if ( controls ) controls.target.copy( siteCenter() );
 		return;
 	}
 	camera.position.set( 0, EYE, - HERO_PUSH );
@@ -7397,8 +10104,10 @@ function frame() {
 	else if ( fly.enabled ) fly.update( dt );
 	railStep( dt );
 	const floorMoved = floorStep( dt );
+	// the real building's storey bands, and its floor view's dials
+	const bandMoved = FLAT_GONE ? lvBandStep( dt ) : false;
 	planGlide( dt );
-	const planMoved = planRevealStep( dt );
+	const planMoved = planRevealStep( dt ) || ( FLAT_GONE && lvRevealStep( dt ) ) || bwLightStep( dt );
 	doorRigStep( dt );
 	const busy = tweens.length > 0;
 	if ( busy ) invalidate( SETTLE );
@@ -7412,6 +10121,7 @@ function frame() {
 	}
 	// the area badges ride the plan, so they move with the camera as well
 	if ( shifted && planDrawOwns() ) planBadgeTell();
+	if ( shifted && FLAT_GONE ) lvBadgeTell();
 	// ...and so do the room dots on the open flat
 	if ( shifted || busy ) { roomDotTell(); roomShellStep(); }
 	// under a ceiling the sun's cascades are fitted to this view: see `roomShadow`
@@ -7428,7 +10138,7 @@ function frame() {
 	 * supersample, two and a quarter times the pixels, to an animation.
 	 * Measured: 14 frames drawn for a 0.6 s reveal, 33 ms each, locked to
 	 * half vsync. They are motion, and the ladder is told so. */
-	const stirred = shifted || busy || planMoved || floorMoved;
+	const stirred = shifted || busy || planMoved || floorMoved || bandMoved;
 	if ( stirred ) { moveFrames = MOVE_HOLD; stillFrames = 0; invalidate( SETTLE ); }
 	else if ( moveFrames > 0 ) moveFrames --;
 	// a shot that has stood still long enough to be worth supersampling
@@ -7437,7 +10147,12 @@ function frame() {
 	if ( ADAPT ) applyScale();
 	else if ( MOVE_SCALE < 1 ) setRenderScale( moveFrames === 0 );
 
-	if ( compiling ) return;                 // the renderer is lent out
+	if ( compiling ) {                       // the renderer is lent out
+		if ( ! compileSince ) compileSince = performance.now();
+		else if ( bwOn && performance.now() - compileSince > BW_HOLD_CUE ) bwTell();
+		return;
+	}
+	compileSince = 0;
 	if ( owed <= 0 ) { fpsEl.textContent = 'idle'; acc = frames = 0; return; }
 	owed --;
 	pipeline.render();

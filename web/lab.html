@@ -100,17 +100,43 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 		return all.buffer;
 	} );
 	p.progress = o;
-	/* The show flat, behind the street and never beside it. */
-	p.then( function () {
-		if ( ! split ) return;
-		window.__glbFlat = fetch( './scene-flat.glb' ).then( function ( r ) {
-			if ( ! r.ok ) throw new Error( 'scene-flat.glb ' + r.status );
-			return r.arrayBuffer();
-		} );
-	}, function () {} );
+	/* The show flat (scene-flat.glb) is no longer built: the building is the
+	 * real one from the plans now and its interiors arrive as their own
+	 * files (web/interior/, blender/plans/CONTRACT.md), asked for by app.js
+	 * when it needs them. Nothing else is fetched here. */
 	return p;
 } )();
 </script>
 <script type="module" src="./app.js"></script>
+<!-- The walk's HUD, the lab's plain one (the page's is in site.js, in two
+     languages): where the body is, the storey's map, the lift's stops, out. -->
+<style>#lwalk[hidden]{display:none !important}</style>
+<div id="lwalk" hidden style="position:fixed; right:12px; top:12px; z-index:30; font:12px/1.4 system-ui, sans-serif; color:#fff8ef; background:rgba(13,27,48,.78); padding:8px 10px; display:grid; gap:6px">
+  <b id="lw-where"></b>
+  <canvas id="lw-map" width="260" height="130" style="background:rgba(255,248,239,.9)"></canvas>
+  <div id="lw-stops" style="display:flex; flex-wrap:wrap; gap:3px"></div>
+  <button id="lw-out" type="button">Leave</button>
+</div>
+<script>
+addEventListener( 'lp:ready', function () { if ( window.LP && 'walkMap' in window.LP ) window.LP.walkMap = document.getElementById( 'lw-map' ); } );
+document.getElementById( 'lw-out' ).onclick = function () { if ( window.LP ) window.LP.walkExit(); };
+var lwKey = '';
+addEventListener( 'lp:walk', function ( e ) {
+	var d = e.detail || {}, box = document.getElementById( 'lwalk' );
+	box.hidden = ! d.on;
+	if ( ! d.on ) return;
+	document.getElementById( 'lw-where' ).textContent = d.level + ( d.floor ? ' (floor ' + d.floor + ')' : '' )
+		+ ( d.flat ? ' · flat ' + d.flat : d.office ? ' · office ' + d.office : '' )
+		+ ' · ' + ( d.room ? d.room.name || 'Room' : d.surface || '' ) + ( d.waiting ? ' ...' : '' );
+	var st = document.getElementById( 'lw-stops' ), L = d.lift;
+	var key = L ? L.id + L.stops.join() + L.at + L.riding : '';
+	if ( key === lwKey ) return;
+	lwKey = key; st.innerHTML = '';
+	if ( L ) L.stops.forEach( function ( lv ) {
+		var b = document.createElement( 'button' ); b.textContent = lv; b.disabled = L.riding || lv === L.at;
+		b.onclick = function () { window.LP.liftGo( lv ); }; st.appendChild( b );
+	} );
+} );
+</script>
 </body>
 </html>
