@@ -978,6 +978,7 @@ async function init() {
 		else if ( m ) setTimeout( () => lvOpenFlat( m[ 1 ] ), 400 );
 	}
 	announce( 'ready' );
+	loadHood();
 	// Everything Scene 2 needs - the show flat's maps and its pipelines - is
 	// fetched and compiled in the background once the street is up.
 	/* The flat used to be wanted only if somebody clicked, so the page put
@@ -1006,9 +1007,19 @@ async function init() {
 	 * the street is the pipelines of all of them. Without it the first floor
 	 * a visitor opens stands unfurnished under the pointer for the 4-5 s its
 	 * furniture takes to compile. */
+	/* ...but on the sales page NOT at boot any more (owner, 2026-11-25:
+	 * "too much loading - lazy-load, don't load the insides until I go to a
+	 * storey"). Every visitor used to download a storey, the cores and its
+	 * furniture (~1.3 MB on the wire, ~3 s of compile) within 80 ms of the
+	 * first frame, whether they ever went in or not. Now it starts on INTENT:
+	 * the pointer on a storey band (`lvSetHot`) or on a street door
+	 * (`bwHotSet`) - typically a second or two before the click - and any
+	 * storey opened by other means loads on demand (`lvPart`). The furniture
+	 * warm is one piece per shader now, so the wait it can leave is short.
+	 * `?prewarm=boot` restores the old behaviour for an A/B. */
 	if ( FLAT_GONE ) {
 		if ( ! EMBED ) setTimeout( lvPrewarm, 1200 );
-		else {
+		else if ( PREWARM_BOOT ) {
 			const go = () => lvPrewarm();
 			const once = { once: true, passive: true };
 			renderer.domElement.addEventListener( 'pointermove', go, once );
@@ -1545,6 +1556,62 @@ async function loadFlat() {
 	return flatReady;
 }
 
+/* The neighbourhood, behind the first frame (owner, 2026-11-25: "too much
+ * loading - lazy-load"). The blocks, lamps, beds and avenue trees round the
+ * site are scene-hood.glb (tools/split_glb.py); the head asks for it once the
+ * street file is down (`window.__glbHood`). Here it is parsed, its pipelines
+ * built through the gate while it is still hidden - so no drawn frame pays a
+ * compile - then welded into `groups.main` exactly as the street was, and the
+ * frozen sun map is redrawn once so the blocks cast their shadows. With the
+ * split off (`?glbsplit=0`) the one file already carried it. */
+let hoodReady = null;
+function loadHood() {
+	if ( ! GLB_SPLIT ) return Promise.resolve( false );
+	if ( hoodReady ) return hoodReady;
+	hoodReady = ( async () => {
+		const t0 = performance.now();
+		let buf = null;
+		if ( window.__glbHood ) {
+			try { buf = await window.__glbHood; } catch ( e ) {
+				console.info( 'the head\'s scene-hood.glb fetch failed, loading it again:', e.message );
+			}
+		}
+		window.__glbHood = null;
+		let gltf;
+		try {
+			gltf = buf
+				? await new Promise( ( res, rej ) => glbLoader.parse( buf, './', res, rej ) )
+				: await glbLoader.loadAsync( './scene-hood.glb' );
+		} catch ( e ) {
+			console.info( 'no neighbourhood file (scene-hood.glb):', e.message );
+			return false;
+		}
+		const tParsed = performance.now();
+		loadMapSet( 'hood' );
+		applyMaterials( gltf.scene, sceneMaterials );
+		const holder = new THREE.Group();
+		holder.name = 'hood_holder';
+		holder.visible = false;
+		holder.add( gltf.scene );
+		scene.add( holder );
+		holder.updateMatrixWorld( true );
+		await compileInto( prePass, [ holder ], holder );
+		await compileInto( scenePass, [ holder ], holder );
+		const tCompiled = performance.now();
+		scene.add( gltf.scene );               // out of the hidden holder, matrices unchanged (both identity)
+		holder.removeFromParent();
+		batchInto( gltf.scene, { main: true } );
+		gltf.scene.removeFromParent();         // the husk, now empty of meshes
+		shadowDirty();
+		invalidate( 4 );
+		console.info( 'neighbourhood: ' + Math.round( tParsed - t0 ) + ' ms to arrive and parse, '
+			+ Math.round( tCompiled - tParsed ) + ' ms to compile, '
+			+ Math.round( performance.now() - tCompiled ) + ' ms to fold in' );
+		return true;
+	} )();
+	return hoodReady;
+}
+
 function prepareScene2() {
 	if ( FLAT_GONE ) return Promise.resolve( false );     // see FLAT_GONE
 	if ( scene2Ready ) return scene2Ready;
@@ -1638,7 +1705,7 @@ const MAP_FILES = [
 	[ 'concreteNor', 'concrete_nor.webp', 0, 0 ],
 	[ 'railDiff', 'rail_diff.webp', 1, 0 ],
 	[ 'railDisp', 'rail_disp.webp', 0, 0 ],
-	[ 'hoodGrain', 'hood_grain.webp', 0, 0 ],   // the neighbours' granite speckle (data, grey)
+	[ 'hoodGrain', 'hood_grain.webp', 0, 2 ],   // the neighbours' granite speckle (data, grey); 2: arrives with scene-hood.glb
 	[ 'parquetDiff', 'parquet_diff.webp', 1, 1 ],
 	[ 'parquetRough', 'parquet_rough.webp', 0, 1 ],
 	[ 'parquetNor', 'parquet_nor.webp', 0, 1 ],
@@ -1712,7 +1779,7 @@ function makeMaps() {
 		t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
 		t.anisotropy = aniso;
 		t.userData.file = file;
-		t.userData.interior = !! interior;
+		t.userData.interior = interior === 2 ? 'hood' : !! interior;
 		m[ key ] = t;
 	}
 	return m;
@@ -3195,6 +3262,7 @@ function lvMaps() {
 		if ( /^(parquet|btile|bfloor|planks)/.test( k ) && t && t.userData && t.userData.file ) fillMap( t );
 }
 
+const PREWARM_BOOT = __q.get( 'prewarm' ) === 'boot';
 let lvPrewarmed = null;
 function lvPrewarm() {
 	if ( lvPrewarmed ) return lvPrewarmed;
@@ -3486,6 +3554,7 @@ function lvFloorDetail( id ) {
 
 function lvSetHot( id ) {
 	if ( id === lvHotLevel ) return;
+	if ( id ) lvPrewarm();                 // intent: the interiors start loading
 	lvHotLevel = id;
 	lvHoverAt = performance.now();
 	embedCursor( false );
@@ -5073,6 +5142,7 @@ function bwDoorUnder( px ) {
 }
 function bwHotSet( id ) {
 	if ( id === bwHot ) return;
+	if ( id && FLAT_GONE ) lvPrewarm();    // intent: a door you could walk in by
 	bwHot = id;
 	const k = id ? ( /^C(\d)$/.exec( id ) || [] )[ 1 ] : null;
 	announce( 'door', { portal: id, k: k ? + k : null, terrace: id === 'podium' } );

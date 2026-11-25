@@ -40,7 +40,7 @@
 set -e
 cd "$(dirname "$0")/../web"
 GT=(npx --yes @gltf-transform/cli@4.5.1)
-for f in scene-street.glb scene-flat.glb; do
+for f in scene-street.glb scene-flat.glb scene-hood.glb; do
   [[ -f $f ]] || { echo "weld_glb: no $f"; continue; }
   tmp=$(mktemp -t weld).glb
   $GT draco $f $tmp --quantize-position 14 --quantize-normal 10 \

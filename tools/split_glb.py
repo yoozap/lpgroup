@@ -31,7 +31,7 @@ the scene exactly where the combined file had put them.
 image of the original turns up in exactly one of them (images and
 geometry) or at least one (materials, which may be shared).
 """
-import json, struct, sys, os, collections
+import json, struct, sys, os, collections, re
 
 JSON_CHUNK, BIN_CHUNK = 0x4E4F534A, 0x004E4942
 # 'flat*' was the show flat; 'in_*' are the plan-driven interiors
@@ -39,6 +39,13 @@ JSON_CHUNK, BIN_CHUNK = 0x4E4F534A, 0x004E4942
 # real-plan rebuild the street build carries neither, and only the street
 # file is written - the other side is written again the day it has nodes.
 IS_FLAT = lambda name: (name or '').startswith('flat') or (name or '').startswith('in_')
+# The neighbourhood (blender/lib_hood.py): its blocks, lamps, beds and fences
+# are `hood_*`, its avenue trees are instances named `<kit>_h<n>`. None of it
+# is the building, so the first frame does not wait for it: it goes into
+# scene-hood.glb, which the page fetches once the street file is down and
+# folds in behind the first frame (app.js `loadHood`). Owner, 2026-11-25:
+# "too much loading - lazy-load".
+IS_HOOD = lambda name: bool(re.match(r'^hood_', name or '') or re.search(r'_h\d+$', name or ''))
 
 
 def read_glb(path):
@@ -271,7 +278,8 @@ def main():
     side = {}
 
     def walk(i, s):
-        s = 'flat' if IS_FLAT(nodes[i].get('name')) else s
+        nm = nodes[i].get('name')
+        s = 'flat' if IS_FLAT(nm) else ('hood' if IS_HOOD(nm) else s)
         side[i] = s
         for c in nodes[i].get('children', []):
             walk(c, s)
@@ -290,7 +298,8 @@ def main():
         return keep
 
     out = {}
-    for want, name in (('street', 'scene-street.glb'), ('flat', 'scene-flat.glb')):
+    for want, name in (('street', 'scene-street.glb'), ('flat', 'scene-flat.glb'),
+                       ('hood', 'scene-hood.glb')):
         keep = keep_for(want)
         if not any(side[i] == want for i in keep):
             print('  %-18s nothing on this side - not written' % name)

@@ -93,6 +93,16 @@ window.__glb = /glbpre=0/.test( location.search ) ? null : ( function () {
 		return all.buffer;
 	} );
 	p.progress = o;
+	/* The neighbourhood (scene-hood.glb, tools/split_glb.py) is not in the
+	 * first frame. It is asked for once the street file is DOWN, so it never
+	 * takes bandwidth from it, and app.js folds it in behind the first frame
+	 * (`loadHood`). On a fast link it is usually here before the veil lifts. */
+	if ( split ) window.__glbHood = p.then( function () {
+		return fetch( './scene-hood.glb' ).then( function ( r ) {
+			if ( ! r.ok ) throw new Error( 'scene-hood.glb ' + r.status );
+			return r.arrayBuffer();
+		} );
+	} );
 	/* The show flat (scene-flat.glb) is no longer built: the building is the
 	 * real one from the plans now and its interiors arrive as their own
 	 * files (web/interior/, blender/plans/CONTRACT.md), asked for by app.js
