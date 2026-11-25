@@ -180,7 +180,12 @@ def write_meta(path):
     def on_circle(bearing_deg, z):
         a = math.radians(bearing_deg)
         return W(cx + R * math.cos(a), cy + R * math.sin(a), z)
-    rail = {'a': on_circle(160.0, 17.0), 'b': on_circle(143.0, 15.0)}
+    # 160 -> 143 turned only 17 degrees in a 50 s leg (user, 2026-11-25:
+    # "the shot should turn a little"). 172 -> 145 turns 27, over open street
+    # all the way (the west street, then the south-west junction). Wider was
+    # tried: from 185 the gable fills the frame alone, and at 141 the wing
+    # runs off the right edge.
+    rail = {'a': on_circle(172.0, 17.0), 'b': on_circle(145.0, 15.0)}
     corner = W(-0.25, 18.25, LB.ROOF_Z)
     meta = {
         'frame': {'origin': W(0, 0, 0), 'ex': D(1, 0, 0), 'ey': D(0, 1, 0), 'up': [0, 1, 0],

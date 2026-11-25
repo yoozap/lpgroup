@@ -1865,8 +1865,7 @@ function groupOf( o ) {
  * Nothing in here creates a group or measures the scene; `optimise` keeps
  * both, because they are the parts that may only happen once. */
 const TREE_TILE = + ( __q.get( 'treetile' ) ?? 50 );   // tree tile, metres (0: whole)
-const HOOD_TILE_X = + ( __q.get( 'hoodtile' ) ?? 2.4 );  // a neighbours' tile, in tree tiles
-const IS_TILED = /^(foliage|foliage_b|bark|hood_.*)$/;
+const IS_TILED = /^(foliage|foliage_b|bark)$/;
 function batchInto( root, only ) {
 	const byGeo = new Map();
 	// In developer mode every piece of the flat stays its own object so it can
@@ -1935,14 +1934,15 @@ function batchInto( root, only ) {
 	 * stands beside, a leaf could never be turned without taking its own
 	 * doorframe round with it. See `doorRig`. */
 	const byMat = new Map();
-	/* The trees and the neighbours are welded in TILES of the plan, not one
-	 * mesh a material: 50 m squares for the trees, 120 m for the neighbours
-	 * (a fifth of the triangles, spread over 800 m), each tile culled by
-	 * its bounding sphere. One mesh for the whole city meant every pass - the
-	 * walk's shadow redraw on every moving frame above all - submitted every
-	 * crown and every neighbour, almost all of it outside the cascade box or
-	 * behind the camera. Same material, same attributes: more draws, no new
-	 * pipeline. `?treetile=0` welds them whole, as before. */
+	/* The trees are welded in TILES of the plan - 50 m squares, each culled
+	 * by its bounding sphere - not one mesh a material. One mesh for the
+	 * whole city meant every pass, the walk's shadow redraw on every moving
+	 * frame above all, submitted all 1.07 M triangles of crowns, almost all
+	 * of them outside the cascade box or behind the camera. Same material,
+	 * same attributes: ~60 more draws, no new pipeline. The neighbours
+	 * (hood_*) stay whole: tiled they were 150 more draws for 0.3 M
+	 * triangles and the lift ride got slower on draw submission.
+	 * `?treetile=0` welds the trees whole, as before. */
 	const tileOf = new Map();
 	if ( TREE_TILE ) {
 		const box = new THREE.Box3(), c = new THREE.Vector3();
@@ -1952,8 +1952,7 @@ function batchInto( root, only ) {
 			m.updateWorldMatrix( true, false );
 			if ( ! m.geometry.boundingBox ) m.geometry.computeBoundingBox();
 			box.copy( m.geometry.boundingBox ).applyMatrix4( m.matrixWorld ).getCenter( c );
-			const cell = /^hood_/.test( n ) ? TREE_TILE * HOOD_TILE_X : TREE_TILE;
-			tileOf.set( m, Math.floor( c.x / cell ) + ',' + Math.floor( c.z / cell ) );
+			tileOf.set( m, Math.floor( c.x / TREE_TILE ) + ',' + Math.floor( c.z / TREE_TILE ) );
 		}
 	}
 	leftovers.forEach( ( [ g, m ] ) => {
@@ -5297,12 +5296,18 @@ function furnWarmSet( reps ) {
 	}
 	return [ ...seen.values() ];
 }
+/* The walk's welded furniture, built in slices a frame apart (levels.js
+ * `weldedAsync`) - the one-task weld was the bulk of every storey entry's
+ * worst frame. `?weldslice=0` welds in one go, as before. */
+const WELD_SLICE = __q.get( 'weldslice' ) !== '0';
+function lvFurnWeld( F ) {
+	return WELD_SLICE ? F.weldedAsync( nextFrame ) : Promise.resolve( F.welded() );
+}
 function lvFurnCompile( P, F ) {
 	/* On a walk only the welded variant is wanted, and it is built the walk's
 	 * way (`lvWarmWalk`); the floor view's instanced one is built behind the
 	 * gate the first time a floor view needs it. */
-	if ( bwOn && BW_ASYNC && PIPES ) {
-		const W = F.welded();
+	if ( bwOn && BW_ASYNC && PIPES ) return lvFurnWeld( F ).then( ( W ) => {
 		const mats = new Set( W.children.filter( o => o.isMesh ).map( o => o.material )
 			.concat( [ ...W.userData.keepInst ] ) );
 		let gWas = false, capWas = false;
@@ -5316,12 +5321,12 @@ function lvFurnCompile( P, F ) {
 			if ( ! ( bwOn && bwShown.has( P.name ) ) ) { F.walk( false ); F.all( 0 ); P.group.visible = gWas; }
 			if ( P.cap ) P.cap.visible = capWas;
 		}, mats, lvFurnWalked );
-	}
+	} );
 	const job = lvWarm.then( async () => {
 		/* Both ways it is drawn - instanced in the floor view, welded on a
 		 * walk - are pipelines of their own; both are built here, behind the
 		 * gate, so neither is a first draw in front of a visitor. */
-		const W = F.welded();
+		const W = await lvFurnWeld( F );
 		const mats = new Set( F.instanced.children.map( o => o.material ) );
 		const key = ( m ) => m.uuid;
 		if ( ! [ ...mats ].every( m => lvFurnWarmed.has( key( m ) ) ) ) {
@@ -6582,8 +6587,9 @@ const RAIL_PIN_Y = + ( __q.get( 'pin' ) ?? 0.26 );
 /* ...and where across the window that corner stands, as a fraction of the
  * width. Pinning it is what keeps the gap between the type and the building
  * the same all the way round: the camera orbits, the composition does not. */
-/* 0.52 -> 0.46 (user, 2026-11-25: "move the building a little left"). */
-const RAIL_PIN_X = + ( __q.get( 'pinx' ) ?? 0.46 );
+/* 0.52 -> 0.46 -> 0.56 (user, 2026-11-25: at 0.46 the building sat on
+ * the headline; "move it right by 10%"). */
+const RAIL_PIN_X = + ( __q.get( 'pinx' ) ?? 0.56 );
 const RAIL_PAUSE = 1200;     // ms held still at each end - and at full size
 const RAIL_IDLE = 9000;      // ms after a drag before it picks up again
 const RAIL_REJOIN = 2600;    // ms easing back onto the rail

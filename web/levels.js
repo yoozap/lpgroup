@@ -582,6 +582,126 @@ export function buildFurniture( root, lvIndex, mats, onMissing ) {
 		group.add( weld );
 		return weld;
 	}
+	/* The same weld, sliced: the welded meshes are written straight into one
+	 * preallocated array per attribute and material - no clone, no
+	 * applyMatrix4 copy, no merge - in the order `welded()` writes them, with
+	 * the same arithmetic (Vector3.applyMatrix4 / applyNormalMatrix), and a
+	 * frame is let through whenever SLICE_MS has gone. The sync weld was one
+	 * 100-270 ms task on every storey a walk loads. A material whose sets do
+	 * not line up (mixed indexing, differing attributes or types) is welded
+	 * the old way, so the result is what `welded()` would have built. */
+	let weldJob = null, gone = false;
+	function weldedAsync( yieldFn, SLICE_MS = 8 ) {
+		if ( weld ) return Promise.resolve( weld );
+		if ( weldJob ) return weldJob;
+		weldJob = ( async () => {
+			const out = new THREE.Group();
+			out.name = 'furniture_welded';
+			out.visible = false;
+			const byMat = new Map();
+			for ( const S of sets.values() ) {
+				const keepUv = !! ( S.mat.map || S.mat.normalMap || S.mat.roughnessMap || S.mat.aoMap );
+				if ( ! byMat.has( S.mat ) ) byMat.set( S.mat, { keepUv, sets: [] } );
+				byMat.get( S.mat ).sets.push( S );
+			}
+			let t0 = performance.now();
+			const tick = async () => { if ( performance.now() - t0 > SLICE_MS ) { await yieldFn(); t0 = performance.now(); } };
+			const keepInst = new Set();
+			const _v = new THREE.Vector3(), _nm = new THREE.Matrix3();
+			for ( const [ mat, E ] of byMat ) {
+				const names = ( g ) => Object.keys( g.attributes ).filter( a => a === 'position' || a === 'normal' || ( E.keepUv && a === 'uv' ) ).sort().join();
+				const g0 = E.sets[ 0 ].geo, nm0 = names( g0 );
+				const same = E.sets.every( S => names( S.geo ) === nm0 && !! S.geo.index === !! g0.index
+					&& [ 'position', 'normal', 'uv' ].every( a => {
+						const A = S.geo.attributes[ a ], B = g0.attributes[ a ];
+						if ( ! B || ! nm0.split( ',' ).includes( a ) ) return true;
+						return A.itemSize === B.itemSize && !! A.normalized === !! B.normalized && ! A.isInterleavedBufferAttribute
+							&& A.array.constructor === B.array.constructor && ( a === 'uv' || A.array instanceof Float32Array );
+					} ) );
+				let geo = null;
+				if ( ! same ) {
+					// the old way, for this material alone
+					const geos = [];
+					for ( const S of E.sets ) for ( const it of S.items ) {
+						const g = S.geo.clone().applyMatrix4( it.m );
+						for ( const a of Object.keys( g.attributes ) )
+							if ( a !== 'position' && a !== 'normal' && ! ( E.keepUv && a === 'uv' ) ) g.deleteAttribute( a );
+						g.morphAttributes = {};
+						geos.push( g );
+					}
+					geo = mergeAll( geos );
+					for ( const g of geos ) g.dispose();
+					await tick();
+				} else {
+					const has = nm0.split( ',' );
+					let V = 0, I = 0;
+					for ( const S of E.sets ) {
+						V += S.geo.attributes.position.count * S.items.length;
+						if ( g0.index ) I += S.geo.index.count * S.items.length;
+					}
+					const pos = new Float32Array( V * 3 );
+					const nor = has.includes( 'normal' ) ? new Float32Array( V * 3 ) : null;
+					const uvA = has.includes( 'uv' ) ? g0.attributes.uv : null;
+					const uv = uvA ? new uvA.array.constructor( V * uvA.itemSize ) : null;
+					const idx = g0.index ? ( V > 65535 ? new Uint32Array( I ) : new Uint16Array( I ) ) : null;
+					let vo = 0, io = 0;
+					for ( const S of E.sets ) {
+						const P = S.geo.attributes.position.array, N = nor && S.geo.attributes.normal.array;
+						const U = uv && S.geo.attributes.uv.array, X = idx && S.geo.index;
+						const n = S.geo.attributes.position.count;
+						for ( const it of S.items ) {
+							const e = it.m.elements;
+							for ( let i = 0; i < n; i ++ ) {
+								const x = P[ i * 3 ], y = P[ i * 3 + 1 ], z = P[ i * 3 + 2 ];
+								const w = 1 / ( e[ 3 ] * x + e[ 7 ] * y + e[ 11 ] * z + e[ 15 ] );
+								const o = ( vo + i ) * 3;
+								pos[ o ] = ( e[ 0 ] * x + e[ 4 ] * y + e[ 8 ] * z + e[ 12 ] ) * w;
+								pos[ o + 1 ] = ( e[ 1 ] * x + e[ 5 ] * y + e[ 9 ] * z + e[ 13 ] ) * w;
+								pos[ o + 2 ] = ( e[ 2 ] * x + e[ 6 ] * y + e[ 10 ] * z + e[ 14 ] ) * w;
+							}
+							if ( N ) {
+								_nm.getNormalMatrix( it.m );
+								const q = _nm.elements;
+								for ( let i = 0; i < n; i ++ ) {
+									_v.set( N[ i * 3 ], N[ i * 3 + 1 ], N[ i * 3 + 2 ] );
+									const x = _v.x, y = _v.y, z = _v.z;
+									_v.x = q[ 0 ] * x + q[ 3 ] * y + q[ 6 ] * z;
+									_v.y = q[ 1 ] * x + q[ 4 ] * y + q[ 7 ] * z;
+									_v.z = q[ 2 ] * x + q[ 5 ] * y + q[ 8 ] * z;
+									_v.normalize();
+									const o = ( vo + i ) * 3;
+									nor[ o ] = _v.x; nor[ o + 1 ] = _v.y; nor[ o + 2 ] = _v.z;
+								}
+							}
+							if ( U ) uv.set( U.subarray( 0, n * uvA.itemSize ), vo * uvA.itemSize );
+							if ( X ) { for ( let j = 0; j < X.count; j ++ ) idx[ io + j ] = X.getX( j ) + vo; io += X.count; }
+							vo += n;
+							await tick();
+						}
+					}
+					geo = new THREE.BufferGeometry();
+					geo.setAttribute( 'position', new THREE.BufferAttribute( pos, 3 ) );
+					if ( nor ) geo.setAttribute( 'normal', new THREE.BufferAttribute( nor, 3 ) );
+					if ( uv ) geo.setAttribute( 'uv', new THREE.BufferAttribute( uv, uvA.itemSize, uvA.normalized ) );
+					if ( idx ) geo.setIndex( new THREE.BufferAttribute( idx, 1 ) );
+				}
+				if ( ! geo ) { keepInst.add( mat ); continue; }
+				geo.computeBoundingSphere();
+				const mesh = new THREE.Mesh( geo, mat );
+				mesh.name = 'furn_weld_' + mat.name;
+				mesh.castShadow = mesh.receiveShadow = true;
+				mesh.frustumCulled = false;
+				out.add( mesh );
+			}
+			out.userData.keepInst = keepInst;
+			// a sync weld got there first, or the level was let go meanwhile
+			if ( weld || gone ) { for ( const m of out.children ) m.geometry.dispose(); return weld || out; }
+			weld = out;
+			group.add( weld );
+			return weld;
+		} )();
+		return weldJob;
+	}
 	let isWeld = false;
 	// a piece is drawn when it stands, and - on a walk - only if its material would not weld
 	const vis = ( q ) => q.s > 0 && ( ! isWeld || weld.userData.keepInst.has( q.mesh.material ) );
@@ -632,6 +752,7 @@ export function buildFurniture( root, lvIndex, mats, onMissing ) {
 			return a || b;
 		},
 		welded,
+		weldedAsync,
 		get instanced() { return inst; },
 		/* one mesh of each (geometry, material): what a compile has to see */
 		reps,
@@ -643,6 +764,7 @@ export function buildFurniture( root, lvIndex, mats, onMissing ) {
 			return { by: out, all: [ ...units.values() ].reduce( ( a, l ) => a + l.length, 0 ), weld: isWeld };
 		},
 		dispose() {
+			gone = true;
 			for ( const m of inst.children ) m.dispatchEvent( { type: 'dispose' } );
 			for ( const S of sets.values() ) S.geo.dispose();
 			if ( weld ) for ( const m of weld.children ) m.dispatchEvent( { type: 'dispose' } );

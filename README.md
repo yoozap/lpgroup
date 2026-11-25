@@ -2758,7 +2758,7 @@ lamp columns, corner beds behind timber-slat fences, benches.
 stands on the 6 m building line like the other three, and the far pavement
 keeps beds, benches and trees. That moved the cameras: the lab hero and the
 `?hero=` candidates stand on that pavement (y 75.5), and the sales page's
-rail (`build.py`, `rail`) is 85 m out at bearings 160 -> 143, from over the
+rail (`build.py`, `rail`) is 85 m out at bearings 172 -> 145, corner pinned 56% across, from over the
 west street to the south-west junction (render 002's standpoint). The old
 arc (134 -> 112) now runs through buildings, and an arc pulled in over the
 street (62 m) put the building past the frame's edge. Re-shoot
