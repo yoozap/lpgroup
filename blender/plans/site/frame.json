@@ -1,0 +1,87 @@
+{
+ "utm_zone": "38N",
+ "epsg": 32638,
+ "origin_utm": [
+  498878.41,
+  4601066.99
+ ],
+ "origin_is": "plan (0,0) = axis a x axis 1 (west gable, back line of the tower)",
+ "bearing_deg": 154.63,
+ "bearing_note": "plan +x (a->J) points SSE along Pavle Todria St; plan +y (street side) points bearing 244.63 (WSW). UTM grid bearing; grid convergence -0.009 deg (negligible)",
+ "mirror_y": true,
+ "mirror_note": "plan y is 90 deg CLOCKWISE from x (drawn y-down). E = E0 + x*sin(b) + y*sin(b+90); N = N0 + x*cos(b) + y*cos(b+90), b=bearing_deg",
+ "scale": 1.0,
+ "scale_note": "plan metres = ground metres; free fit gave 0.974 (roof corner picking error); UTM point scale here 0.99960",
+ "residuals_m": {
+  "tower_roof_corners_scale_fixed": {
+   "(-0.25,18.25)": 0.49,
+   "(-0.25,-1.75)": 0.72,
+   "(44.1,-1.75)": 0.5,
+   "(44.1,18.25)": 0.97,
+   "rms": 0.7
+  },
+  "relief_correction": "roof corners shifted 10.4 m toward bearing ~100 deg to undo off-nadir lean (+-2 m)",
+  "check_vs_osm_parcel_983347653": {
+   "SSE_front": 5.33,
+   "SSE_back": 4.47,
+   "NNW_front": 5.16,
+   "note": "OSM landuse polygon is coarse (frontage 116.5 m vs plan 108.1 m); same bearing 154.5"
+  },
+  "absolute": "Esri Vivid 2025-11-06, stated accuracy 8.47 m; OSM footprints overlay this imagery within ~1-2 m here"
+ },
+ "lat": 41.5612745,
+ "lon": 44.9865491,
+ "site_centre_plan": [
+  41.5,
+  18.0
+ ],
+ "streets": {
+  "S": {
+   "name": "Pavle Todria Street (პავლე თოდრიას ქუჩა), tertiary",
+   "osm": [
+    1251129928,
+    587371179,
+    587371265,
+    1251129929
+   ],
+   "centreline_plan_y": 57.5
+  },
+  "E": {
+   "name": "Giorgi Kuchishvili Street, tertiary (T-junction with Todria at plan x~93)",
+   "osm": [
+    37897596
+   ],
+   "centreline_plan_x": 92.5
+  },
+  "W": {
+   "name": "unnamed residential lane (asphalt) from Todria to the back lane",
+   "osm": [
+    37897676
+   ],
+   "centreline_plan_x": -31
+  },
+  "N": {
+   "name": "no street directly behind: service yard 983347652 at plan y~-26, unnamed gravel lane 176677015 at y~-90, Konstantine Leselidze Street at y~-165",
+   "osm": [
+    983347652,
+    176677015,
+    37897583
+   ]
+  }
+ },
+ "evidence": {
+  "images": [
+   "locate/z18_addr.png",
+   "locate/z19_site.png",
+   "locate/z19_site_osm.png",
+   "locate/z19_tower_3x.png",
+   "locate/z19_plan_fit.png",
+   "locate/z19_plan_fit_crop.png"
+  ],
+  "osm": {
+   "old_market_Todria_11": 176675818,
+   "parcel_landuse_commercial": 983347653,
+   "obsolete_service_lane_under_tower": 983347651
+  }
+ }
+}
