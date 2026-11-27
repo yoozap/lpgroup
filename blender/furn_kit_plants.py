@@ -566,7 +566,7 @@ def pick_pot(rng, mat_p, style_p, styles, mats=POT_MATS):
 
 # ================================================================== plants
 def b_monstera(K, w, d, rng, h=1.1, pot_d=0.32, leaves=8, pot_style=-1, pot_mat=-1):
-    st, mt = pick_pot(rng, pot_mat, pot_style, ('cyl', 'belly', 'taper'))
+    st, mt = pick_pot(rng, pot_mat, pot_style, ('cyl', 'belly', 'taper'), mats=('int_pot', 'int_stone_dark'))
     P = pot(K, mt, 0, 0, pot_d, pot_d * 0.92, st, seg=18)
     zs, rin = P['z_soil'], P['r_in']
     n = int(round(leaves))
@@ -597,6 +597,54 @@ def b_monstera(K, w, d, rng, h=1.1, pot_d=0.32, leaves=8, pot_style=-1, pot_mat=
         nn = perp(add(UP, mul(out, 0.35 + 0.4 * max(0, e))), v)
         mature = L > 0.22
         monstera_leaf(blade, att, v, nn, L, rng, mature)
+
+
+def b_strelitzia(K, w, d, rng, h=1.5, pot_d=0.40, leaves=10, pot_style=-1, pot_mat=-1):
+    """Bird of paradise (Strelitzia nicolai / reginae), the big plant of the
+    owner's renders: long upright green petioles from the soil, each with a
+    paddle blade held high and turned out from the clump, a little torn at
+    the margin; a round dark belly pot (int_pot / int_stone_dark only)."""
+    st, mt = pick_pot(rng, pot_mat, pot_style, ('belly', 'cyl', 'taper'), mats=('int_pot', 'int_stone_dark'))
+    P = pot(K, mt, 0, 0, pot_d, pot_d * 0.86, st, seg=16)
+    zs, rin = P['z_soil'], P['r_in']
+    n = int(round(leaves))
+    phase = rng.uniform(0, TAU)
+    stem = K('foliage_b', True)
+    blade = K('foliage', True)
+    top = h - zs
+    for i in range(n):
+        age = i / float(max(1, n - 1))                   # 0 = oldest, outermost
+        az = phase + i * GOLD + rng.uniform(-0.2, 0.2)
+        out = hdir(az)
+        L = top * rng.uniform(0.34, 0.44) * (1.0 - 0.18 * age)
+        tilt = math.radians(rng.uniform(16, 30) * (1.0 - 0.55 * age))   # petiole off vertical
+        tilt2 = tilt + math.radians(rng.uniform(6, 20))                 # the blade leans a bit more
+        pl = top - L * math.cos(tilt2) - 0.03
+        pl *= rng.uniform(0.82, 1.0) * (0.86 + 0.14 * age)
+        # keep the spread in the box
+        rr = reach(w, d, az) * 0.96
+        hor = pl * math.sin(tilt) + L * math.sin(tilt2)
+        if hor > rr:
+            k = rr / hor
+            tilt, tilt2 = math.asin(clamp(math.sin(tilt) * k, 0, 1)), math.asin(clamp(math.sin(tilt2) * k, 0, 1))
+        b0 = (rng.uniform(-0.3, 0.3) * rin, rng.uniform(-0.3, 0.3) * rin, zs - 0.01)
+        dv = nrm(add(mul(out, math.sin(tilt)), (0.0, 0.0, math.cos(tilt))))
+        p1 = add(b0, mul(dv, pl))
+        mid = add(add(b0, mul(dv, pl * 0.5)), mul(out, -0.01))
+        tube(stem, [b0, mid, p1], [0.014, 0.011, 0.008], seg=4, cap_end=False)
+        v = nrm(add(mul(out, math.sin(tilt2)), (0.0, 0.0, math.cos(tilt2))))
+        side = hdir(az + math.pi / 2 * (1 if rng.random() < 0.5 else -1))
+        nn = perp(add(out, mul(side, rng.uniform(0.2, 0.9))), v)
+        hw = rng.uniform(0.18, 0.22)
+        rows = (0.0, 0.06, 0.22, 0.45, 0.68, 0.86, 0.96, 1.0)
+        hws = (0.012, hw * 0.55, hw * 0.92, hw, hw * 0.94, hw * 0.70, hw * 0.32, 0.0)
+        pts, faces = blade2d(L, rows, hws, wave=0.03, rnd=rng, cols=5, midlift=-0.01)
+        # a torn margin: pull a few edge points in toward the midrib
+        for j in range(len(pts)):
+            x, y, z = pts[j]
+            if abs(y) > 1e-6 and rng.random() < 0.35:
+                pts[j] = (x, y * rng.uniform(0.55, 0.85), z)
+        emit2d(blade, leaf_map(p1, v, nn, L, fold=0.10, droop=0.04 + 0.05 * (1 - age)), pts, faces)
 
 
 def monstera_leaf(m, base, v, n, L, rng, mature):
@@ -1528,6 +1576,15 @@ KINDS = {
               'int_stone_dark (-1 = by seed).',
         sizes={'S': (0.70, 0.70, dict(h=0.75, pot_d=0.24, leaves=6)), 'M': (0.95, 0.95, {}),
                'L': (1.25, 1.25, dict(h=1.5, pot_d=0.40, leaves=10))}),
+    'plant_strelitzia': dict(
+        drawn=False, w=(0.95, 0.6, 1.3), d=(0.95, 0.6, 1.3),
+        params=dict(h=(1.5, 0.9, 2.0), pot_d=(0.40, 0.26, 0.48), leaves=(10, 6, 13), **_pp()),
+        footprint='w x d = the leaf spread (ellipse in the box); the pot (pot_d) at the origin; h = the top leaf',
+        wall=False, solid=True,
+        notes=FLOOR_NOTES + 'Bird of paradise (the owner\'s renders): paddle leaves on long upright petioles; a round '
+              'dark pot only (pot_mat 0 = int_pot, 3 = int_stone_dark; -1 = one of the two by seed).',
+        sizes={'S': (0.70, 0.70, dict(h=1.0, pot_d=0.30, leaves=7)), 'M': (0.95, 0.95, {}),
+               'L': (1.15, 1.15, dict(h=1.85, pot_d=0.46, leaves=12))}),
     'plant_fiddle': dict(
         drawn=False, w=(0.70, 0.45, 0.95), d=(0.70, 0.45, 0.95),
         params=dict(h=(1.6, 1.0, 2.1), pot_d=(0.34, 0.26, 0.44), leaves=(28, 14, 36), **_pp()),
@@ -1674,7 +1731,7 @@ KINDS = {
 }
 
 _BUILDERS = {
-    'plant_monstera': b_monstera, 'plant_fiddle': b_fiddle, 'plant_rubber': b_rubber, 'plant_snake': b_snake,
+    'plant_monstera': b_monstera, 'plant_strelitzia': b_strelitzia, 'plant_fiddle': b_fiddle, 'plant_rubber': b_rubber, 'plant_snake': b_snake,
     'plant_palm': b_palm, 'plant_olive': b_olive, 'plant_pothos': b_pothos, 'plant_succulents': b_succulents,
     'plant_herbs': b_herbs, 'planter_balcony': b_planter, 'plant_loggia_pair': b_loggia,
     'decor_vase': b_vase, 'decor_books': b_books, 'decor_bowl': b_bowl, 'decor_candles': b_candles,

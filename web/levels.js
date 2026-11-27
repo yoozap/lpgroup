@@ -154,13 +154,21 @@ export function poleOf( p ) {
  * boot: it is asked for the first time anything wants a level. Re-read on
  * failure rather than cached as a failure - the build may be rewriting it. */
 let planReq = null, liteReq = null;
+/* JSON_CACHE (step 2-storey): on the sales page (body data-embed="1") the
+ * plan JSON is fetched under the server's own caching - nginx sends
+ * must-revalidate and an ETag, so a repeat visit gets a 304 and an edited
+ * file is still picked up; serve.py sends no-store, so dev is unchanged.
+ * The render lab keeps no-store. `?jsoncache=old` restores no-store. */
+export const JSON_CACHE = typeof document !== 'undefined' && !! document.body && document.body.dataset.embed === '1'
+	&& new URLSearchParams( location.search ).get( 'jsoncache' ) !== 'old';
+export const jsonInit = () => JSON_CACHE ? {} : { cache: 'no-store' };
 const index = { byId: new Map(), byN: new Map() };
 export function planMeta() {
 	if ( planReq ) return planReq;
 	planReq = ( async () => {
 		for ( let k = 0; k < 3; k ++ ) {
 			try {
-				const r = await fetch( './plan_meta.json', { cache: 'no-store' } );
+				const r = await fetch( './plan_meta.json', jsonInit() );
 				if ( ! r.ok ) throw new Error( 'plan_meta.json ' + r.status );
 				const m = await r.json();
 				indexPlan( m );
@@ -198,7 +206,7 @@ export const planReady = () => index.byId.size > 0;
  * room without them gets its pole and a stance worked out here. */
 export function roomsLite() {
 	if ( liteReq ) return liteReq;
-	liteReq = fetch( './rooms_lite.json', { cache: 'no-store' } )
+	liteReq = fetch( './rooms_lite.json', jsonInit() )
 		.then( r => r.ok ? r.json() : { rooms: {} } )
 		.then( j => j.rooms || {} )
 		.catch( () => { liteReq = null; return {}; } );
@@ -407,6 +415,7 @@ const mergeAll = ( geos ) => {
 	if ( mixed ) for ( const g of list ) if ( ! geos.includes( g ) ) g.dispose();
 	return m;
 };
+const MOVER_LEAK = typeof location !== 'undefined' && new URLSearchParams( location.search ).get( 'moverleak' ) === '1';
 export function makeMovers( group, list ) {
 	const byNode = new Map();
 	for ( const d of list ) {
@@ -415,8 +424,17 @@ export function makeMovers( group, list ) {
 	}
 	const out = new Map();
 	let rest = [], dirty = true;
+	/* MOVER_LEAK: a mesh taken out here is told it is gone ('dispose' on the
+	 * OBJECT - three r186 lets a render object go on that, not on its
+	 * geometry's), a few frames later, so its replacement has drawn first and
+	 * holds the pipeline both share. `?moverleak=1` keeps them all, as before. */
+	let dead = [];
+	const bury = ( all ) => {
+		const t = performance.now();
+		dead = dead.filter( ( d ) => { if ( ! all && t - d.t < 150 ) return true; d.m.dispatchEvent( { type: 'dispose' } ); return false; } );
+	};
 	function rebuild() {
-		for ( const m of rest ) { m.removeFromParent(); m.geometry.dispose(); }
+		for ( const m of rest ) { m.removeFromParent(); m.geometry.dispose(); if ( ! MOVER_LEAK ) dead.push( { m, t: performance.now() } ); }
 		rest = [];
 		const by = new Map();
 		for ( const [ n, N ] of byNode ) {
@@ -446,7 +464,7 @@ export function makeMovers( group, list ) {
 			if ( ! N ) return false;
 			let o = out.get( node );
 			if ( ! matrix ) {
-				if ( o ) { for ( const m of o.meshes ) m.removeFromParent(); out.delete( node ); dirty = true; }
+				if ( o ) { for ( const m of o.meshes ) { m.removeFromParent(); if ( ! MOVER_LEAK ) dead.push( { m, t: performance.now() } ); } out.delete( node ); dirty = true; }
 				return true;
 			}
 			if ( ! o ) {
@@ -465,8 +483,9 @@ export function makeMovers( group, list ) {
 			for ( const m of o.meshes ) { m.matrix.copy( matrix ); m.matrixWorldNeedsUpdate = true; }
 			return true;
 		},
-		flush() { if ( dirty ) { rebuild(); return true; } return false; },
+		flush() { if ( dead.length ) bury(); if ( dirty ) { rebuild(); return true; } return false; },
 		dispose() {
+			bury( true );
 			for ( const m of rest ) { m.dispatchEvent( { type: 'dispose' } ); m.geometry.dispose(); }
 			for ( const o of out.values() ) for ( const m of o.meshes ) m.dispatchEvent( { type: 'dispose' } );
 			for ( const N of byNode.values() ) for ( const p of N.parts ) p.geo.dispose();
@@ -486,6 +505,7 @@ export function makeMovers( group, list ) {
  * whole level (walking). `heights` is each node's top over its foot, for
  * the collision (walk.js `furnitureSolids`). */
 const FURN_SPREAD = 0.6;
+const FURN_GRAPH_OLD = typeof location !== 'undefined' && new URLSearchParams( location.search ).get( 'furngraph' ) === 'old';
 export function buildFurniture( root, lvIndex, mats, onMissing ) {
 	root.updateMatrixWorld( true );
 	const sets = new Map(), heights = new Map(), missing = new Set();
@@ -705,12 +725,24 @@ export function buildFurniture( root, lvIndex, mats, onMissing ) {
 	let isWeld = false;
 	// a piece is drawn when it stands, and - on a walk - only if its material would not weld
 	const vis = ( q ) => q.s > 0 && ( ! isWeld || weld.userData.keepInst.has( q.mesh.material ) );
+	/* FURN_GRAPH: while the weld draws every piece, the thousands of hidden
+	 * per-piece meshes leave the scene graph - three walks (and re-multiplies)
+	 * every child of the graph on every render call, hidden or not. They are
+	 * put back, first in the group as they were, the moment they are wanted.
+	 * `?furngraph=old` keeps them in, as before. */
+	const instIn = ( on ) => {
+		if ( on === ( inst.parent === group ) ) return;
+		if ( on ) { group.add( inst ); group.children.splice( group.children.indexOf( inst ), 1 ); group.children.unshift( inst ); }
+		else inst.removeFromParent();
+	};
+	const instFit = () => { if ( ! FURN_GRAPH_OLD ) instIn( ! ( isWeld && weld.userData.keepInst.size === 0 ) ); };
 	function useWeld( on ) {
 		if ( on ) welded();
 		if ( on === isWeld ) return false;
 		isWeld = on;
 		weld.visible = on;
 		for ( const list of units.values() ) for ( const q of list ) q.mesh.visible = vis( q );
+		instFit();
 		return true;
 	}
 	// the stagger: by the reveal order, spread over FURN_SPREAD of the dial
@@ -754,6 +786,8 @@ export function buildFurniture( root, lvIndex, mats, onMissing ) {
 		welded,
 		weldedAsync,
 		get instanced() { return inst; },
+		/* the pieces in the graph for a compile; call what it returns after */
+		instHold() { if ( inst.parent === group ) return () => {}; instIn( true ); return instFit; },
 		/* one mesh of each (geometry, material): what a compile has to see */
 		reps,
 		/* For the rigs: how many pieces of each flat are standing (scale > 0). */

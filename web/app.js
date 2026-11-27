@@ -456,8 +456,30 @@ const stillNow = () => moveFrames === 0 && ! calibrating;
  * nobody has time to look at - so the full density waits half a second of
  * stillness, and the supersample waits SS_DWELL beyond that. */
 const STILL_DWELL = 30;
+/* STILL_HOLD: a parked page must go quiet. The supersample is sized from
+ * `msPerMpx`, and `rate()` re-learns that from the very still frames the
+ * supersample draws; each re-learnt number moved the size by a percent or
+ * two, `applyScale` resized, owed SETTLE more frames, and those re-learnt
+ * it again - ~22 frames a second for ever on a parked hero or a floor view.
+ * So within one still spell the chosen scale only moves when the new
+ * answer differs by more than SS_BAND, at most SS_MOVES times, and is then
+ * held until something moves (or the window, the pixel ratio or the
+ * flat/street budget changes). Learning goes on; it is used next spell.
+ * ?stillhold=old restores the old free-running scale exactly. */
+const STILL_HOLD_OLD = __q.get( 'stillhold' ) === 'old';
+const SS_BAND = 0.04, SS_MOVES = 3;
+let ssHeld = 0, ssMoves = 0, ssKey = '';
+const stillPick = () => {
+	const s = stillScale();
+	if ( STILL_HOLD_OLD ) return s;
+	const key = innerWidth + 'x' + innerHeight + '@' + basePR + ( inFlat() ? 'f' : 's' );
+	if ( stillFrames < SS_DWELL ) { ssHeld = 0; return s; }    // not spent yet: 1
+	if ( key !== ssKey || ! ssHeld ) { ssKey = key; ssHeld = s; ssMoves = 0; return s; }
+	if ( ssMoves < SS_MOVES && Math.abs( s - ssHeld ) > SS_BAND * ssHeld ) { ssHeld = s; ssMoves ++; }
+	return ssHeld;
+};
 const currentPR = () => basePR * ( ADAPT
-	? ( stillNow() && stillFrames >= STILL_DWELL ? stillScale() : STEPS[ prStep ] )
+	? ( stillNow() && stillFrames >= STILL_DWELL ? stillPick() : STEPS[ prStep ] )
 	: ( fullRes ? 1 : MOVE_SCALE ) );
 
 /* resize the drawing buffer to whatever density is wanted now */
@@ -1027,6 +1049,15 @@ async function init() {
 			addEventListener( 'scroll', go, once );
 			addEventListener( 'keydown', go, once );
 			setTimeout( go, WARM2_AFTER );
+		} else {
+			/* ...but not as late as the band either (owner, 2026-11-26: "click
+			 * on floor not works, animation not happened"). Waiting for the
+			 * pointer to reach a storey left a quick click 1-2 s of nothing -
+			 * and on a cold visit the street's own compiles hold the same
+			 * gate for seconds more. A pointer moving over the picture is
+			 * intent enough; a visitor who never touches it still loads
+			 * nothing. */
+			renderer.domElement.addEventListener( 'pointermove', () => lvPrewarm(), { once: true, passive: true } );
 		}
 	}
 	if ( WARM2 && ! FLAT_GONE ) {
@@ -1565,9 +1596,99 @@ async function loadFlat() {
  * frozen sun map is redrawn once so the blocks cast their shadows. With the
  * split off (`?glbsplit=0`) the one file already carried it. */
 let hoodReady = null;
+/* HOOD_FOLD (2026-11-27): the fold above held the frame loop through two
+ * compileInto passes over ~340 loose meshes, each with a drain, and only then
+ * welded them - the 0.8-1.2 s frozen frame in the first second of every ride.
+ * Now it welds FIRST (a couple of dozen meshes) and lets the frames that draw
+ * them ask for their pipelines side by side (`pipesGather`): an object whose
+ * pipeline has not landed is simply not drawn, so nothing is held, and the
+ * few materials no frame has built yet go in one a frame. The frozen sun map
+ * is redrawn once they have all landed. `?hood=old` is the fold as it was,
+ * exactly. (A `boot` arm - parse early, fold into the boot's warm frame - was
+ * built and dropped: started at the street's parse, the file was still not
+ * parsed when the warm frame came, 738 ms, so it never rode it.) */
+const HOOD = __q.get( 'hood' ) === 'old' ? 'old' : 'after';
+let hoodParse = null, hoodParsed = null, hoodFolded = false;
+function hoodParseStart() {
+	if ( hoodParse ) return hoodParse;
+	hoodParse = ( async () => {
+		const t0 = performance.now();
+		let buf = null;
+		if ( window.__glbHood ) {
+			try { buf = await window.__glbHood; } catch ( e ) {
+				console.info( 'the head\'s scene-hood.glb fetch failed, loading it again:', e.message );
+			}
+		}
+		window.__glbHood = null;
+		let gltf;
+		try {
+			gltf = buf
+				? await new Promise( ( res, rej ) => glbLoader.parse( buf, './', res, rej ) )
+				: await glbLoader.loadAsync( './scene-hood.glb' );
+		} catch ( e ) {
+			console.info( 'no neighbourhood file (scene-hood.glb):', e.message );
+			return null;
+		}
+		hoodParsed = { gltf, t0, tParsed: performance.now() };
+		return hoodParsed;
+	} )();
+	return hoodParse;
+}
+/* The weld itself, the same calls in the same order as the old fold. */
+function hoodWeld( gltf ) {
+	loadMapSet( 'hood' );
+	applyMaterials( gltf.scene, sceneMaterials );
+	scene.add( gltf.scene );
+	gltf.scene.updateMatrixWorld( true );
+	batchInto( gltf.scene, { main: true } );
+	gltf.scene.removeFromParent();         // the husk, now empty of meshes
+	hoodFolded = true;
+}
 function loadHood() {
 	if ( ! GLB_SPLIT ) return Promise.resolve( false );
 	if ( hoodReady ) return hoodReady;
+	if ( HOOD !== 'old' && PIPES ) {
+		hoodReady = ( async () => {
+			const P = await hoodParseStart();
+			if ( ! P ) return false;
+			if ( hoodFolded ) return true;
+			// one gatherer at a time: see pipesSettled
+			while ( pipeJobs ) await nextFrame();
+			const known = new Set();
+			scene.traverse( ( o ) => { if ( o.isMesh && o.material ) known.add( o.material ); } );
+			const before = new Set( groups.main.children );
+			const tW = performance.now();
+			hoodWeld( P.gltf );
+			const tWelded = performance.now();
+			const lots = new Map();
+			for ( const o of groups.main.children ) {
+				if ( before.has( o ) || ! o.material || known.has( o.material ) ) continue;
+				if ( ! lots.has( o.material ) ) lots.set( o.material, [] );
+				lots.get( o.material ).push( o );
+				o.visible = false;
+			}
+			pipesGather();
+			invalidate( 2 );
+			await nextFrame(); await nextFrame();
+			for ( const list of lots.values() ) {
+				for ( const o of list ) o.visible = true;
+				invalidate( 2 );
+				await nextFrame(); await nextFrame();
+			}
+			// the shadow pass' pipelines for the new casters, asked for the same way
+			shadowDirty();
+			invalidate( 2 );
+			await nextFrame(); await nextFrame();
+			await pipesSettled();
+			shadowDirty();                          // ...and the frozen map, with them in it
+			invalidate( 4 );
+			console.info( 'neighbourhood: ' + Math.round( P.tParsed - P.t0 ) + ' ms to arrive and parse, '
+				+ Math.round( tWelded - tW ) + ' ms to weld, '
+				+ Math.round( performance.now() - tWelded ) + ' ms to gather ' + lots.size + ' new materials (' + HOOD + ')' );
+			return true;
+		} )();
+		return hoodReady;
+	}
 	hoodReady = ( async () => {
 		const t0 = performance.now();
 		let buf = null;
@@ -3266,6 +3387,7 @@ const PREWARM_BOOT = __q.get( 'prewarm' ) === 'boot';
 let lvPrewarmed = null;
 function lvPrewarm() {
 	if ( lvPrewarmed ) return lvPrewarmed;
+	lvFurnPrefetch( 'L06' );
 	lvPrewarmed = Promise.all( [ lvPart( 'L06' ), lvPart( 'cores' ) ] )
 		.then( ( [ P ] ) => lvFurn( P ) ).catch( () => null );
 	return lvPrewarmed;
@@ -3279,10 +3401,12 @@ function lvPart( name ) {
 	if ( P ) { P.usedAt = performance.now(); return P.ready; }
 	P = { name, state: 'loading', group: null, cap: null, doors: [], tris: 0, usedAt: performance.now() };
 	lvParts.set( name, P );
-	lvMaps();
+	if ( ! LV_ORDER ) lvMaps();
 	P.ready = ( async () => {
 		const t0 = performance.now();
-		const [ buf, pm ] = await Promise.all( [ LVL.fetchPart( name ), LVL.planMeta() ] );
+		const bufP = LVL.fetchPart( name );
+		if ( LV_ORDER ) bufP.then( lvMaps, () => {} );
+		const [ buf, pm ] = await Promise.all( [ bufP, LVL.planMeta() ] );
 		lvPM = pm;
 		const tGot = performance.now();
 		const level = name === 'cores' ? null : LVL.levelById( name );
@@ -3430,6 +3554,7 @@ function lvWith( id, then ) {
 	const ask = ++ lvAsk;
 	lvWaiting = id;
 	embedCursor( false );
+	lvFurnPrefetch( id );
 	if ( ! LV_GATE ) {
 		lvPart( id ).catch( () => {} ); lvPart( 'cores' ).catch( () => {} );
 		return LVL.planMeta().then( ( pm ) => { lvPM = pm; lvWaiting = null; then(); return true; } );
@@ -3591,6 +3716,7 @@ function lvBandStep( dt ) {
 	 * the level is fetched and compiled now, behind the light. */
 	if ( lvHotLevel && lvHotLevel !== lvFetched && performance.now() - lvHoverAt > LV_DWELL ) {
 		lvFetched = lvHotLevel;
+		lvFurnPrefetch( lvHotLevel );
 		lvPart( lvHotLevel ).then( ( P ) => lvFurn( P ) ).catch( () => {} );
 		lvPart( 'cores' ).catch( () => {} );
 	}
@@ -4288,6 +4414,13 @@ let bwStreetLeaves = null;         // the street's stand-in leaves (scene_meta)
 let bwShadowFar = 0, bwSig = '';
 let bwEnded = 0;                   // performance.now() when the last walk ended
 const bwAhead = new Set();         // car+storey whose neighbours have been asked for
+/* RIDE_AHEAD: the storeys either side are asked for where the car STANDS,
+ * not for every storey it passes (each was a furniture fetch, decode and
+ * weld, mostly evicted again before the stop). `?rideahead=old` as before.
+ * RIDE_FIELDS: walk.js builds no field for a storey passed and asks the
+ * worker for the stop's; `?ridefields=old` as before. */
+const RIDE_AHEAD_OLD = __q.get( 'rideahead' ) === 'old';
+const RIDE_FIELDS_OLD = __q.get( 'ridefields' ) === 'old';
 
 /* The engine, once: it reads plan_meta and nothing else. */
 function bwEngine() {
@@ -4295,7 +4428,7 @@ function bwEngine() {
 	if ( bwMaking ) return bwMaking;
 	bwMaking = LVL.planMeta().then( ( pm ) => {
 		lvPM = pm;
-		bwW = createWalker( { meta, planMeta: pm, worker: true,
+		bwW = createWalker( { meta, planMeta: pm, worker: true, rideFieldsOld: RIDE_FIELDS_OLD,
 			toWorld: ( x, y, z ) => frameP.world( x, y, z, _bwv ).toArray(),
 			ready: bwReady, on: bwEvent } );
 		// solids for levels whose furniture is already in
@@ -4425,6 +4558,7 @@ async function bwFromRoom() {
  * already where the body stands (a room) or walks there (a door, a flat). */
 function bwStart( s, from, flyIn ) {
 	bwOn = true;
+	embedCursor( false );
 	bwBeenIn = s.surface !== 'street';
 	bwFrom = from;
 	bwS = s;
@@ -4830,7 +4964,7 @@ function bwApply( s, place = true ) {
 	 * likeliest stops) - walls and furniture, so a first arrival's compile
 	 * happens while the doors are still open here, not on arrival there. A
 	 * flight is already covered: `needLevels` holds both of its ends. */
-	if ( s.inLift && /^L\d\d$/.test( s.level ) && ! bwAhead.has( s.inLift.id + s.level ) ) {
+	if ( s.inLift && /^L\d\d$/.test( s.level ) && ( RIDE_AHEAD_OLD || ! riding ) && ! bwAhead.has( s.inLift.id + s.level ) ) {
 		bwAhead.add( s.inLift.id + s.level );
 		const k = lvStorey( s.level );
 		bwWant( [ lvOfStorey( k + 1 ), lvOfStorey( k - 1 ) ].filter( id => id && lvMetaLevel( id ) && id !== s.level ) );
@@ -5026,6 +5160,7 @@ function bwExit( to = null ) {
 	if ( ! bwOn ) return false;
 	const s = bwS;
 	bwOn = false;
+	embedCursor( false );
 	bwAsk ++;
 	bwEnded = performance.now();
 	bwTouch = null;
@@ -5286,10 +5421,29 @@ function bwWalkFlat( n ) {
  * furnishes the flat under the pointer from the moment it is here. */
 let lvFurnIdx = null;
 function lvFurnIndex() {
-	if ( ! lvFurnIdx ) lvFurnIdx = fetch( './interior/furn/index.json', { cache: 'no-store' } )
+	if ( ! lvFurnIdx ) lvFurnIdx = fetch( './interior/furn/index.json', LVL.jsonInit() )
 		.then( r => r.ok ? r.json() : null ).catch( () => null )
 		.then( ( j ) => { if ( ! j ) lvFurnIdx = null; return j; } );
 	return lvFurnIdx;
+}
+/* LV_ORDER (step 2-storey): the furniture's bytes are asked for at the
+ * moment of intent (`lvFurnPrefetch` from the click, the dwell and the
+ * prewarm), not after the level has been fetched, welded and compiled -
+ * the index first (memoised, so from the second storey on the GLB starts
+ * at once), then the GLB, held here until `lvFurn` takes it. Nothing is
+ * parsed or built early; only the fetch moves. The floor maps go after the
+ * level's own bytes (`lvPart`). `?lvorder=old` restores the old order. */
+const LV_ORDER = __q.get( 'lvorder' ) !== 'old';
+const lvFurnPre = new Map();
+function lvFurnPrefetch( name ) {
+	if ( ! LV_ORDER || ! name || name === 'cores' || lvFurnPre.has( name ) ) return;
+	const P = lvParts.get( name );
+	if ( P && P.furnReady ) return;
+	const pr = lvFurnIndex().then( ( ix ) => ( ix && ix.levels && ix.levels[ name ] ) ? LVL.fetchPart( 'furn/' + name ) : null );
+	pr.catch( () => {} );
+	lvFurnPre.set( name, pr );
+	// a prefetch nobody took (the click went elsewhere) lets go of its bytes
+	setTimeout( () => { if ( lvFurnPre.get( name ) === pr ) lvFurnPre.delete( name ); }, 60000 );
 }
 function lvFurn( P ) {
 	if ( ! P || P.name === 'cores' ) return Promise.resolve( null );
@@ -5297,13 +5451,16 @@ function lvFurn( P ) {
 	P.furnState = 'loading';
 	P.furnReady = ( async () => {
 		const T = [ performance.now() ], tick = () => T.push( performance.now() );
+		if ( LV_ORDER ) lvFurnPrefetch( P.name );
+		const pre = LV_ORDER ? lvFurnPre.get( P.name ) : null;
+		if ( pre ) lvFurnPre.delete( P.name );
 		const ix = await lvFurnIndex();
 		const lv = ix && ix.levels && ix.levels[ P.name ];
 		if ( ! lv ) { P.furnState = 'none'; return null; }
 		// never into a flight: a compile holds the frame loop off
 		for ( let i = 0; i < 400 && tweens.length; i ++ ) await nextFrame();
 		tick();
-		const buf = await LVL.fetchPart( 'furn/' + P.name );
+		const buf = ( pre && await pre.catch( () => null ) ) || await LVL.fetchPart( 'furn/' + P.name );
 		tick();
 		if ( P.state === 'gone' ) { P.furnState = 'none'; return null; }
 		const gltf = await new Promise( ( res, rej ) => glbLoader.parse( buf, './', res, rej ) );
@@ -5406,6 +5563,7 @@ function lvFurnCompile( P, F ) {
 			W.visible = true;
 			const kids = [ ...furnWarmSet( F.reps ), ...W.children ], was = kids.map( o => o.visible );
 			for ( const o of kids ) o.visible = false;
+			const instBack = F.instHold ? F.instHold() : () => {};   // FURN_GRAPH
 			try {
 				for ( let i = 0; i < kids.length; i += FURN_LOT ) {
 					const lot = kids.slice( i, i + FURN_LOT );
@@ -5419,6 +5577,7 @@ function lvFurnCompile( P, F ) {
 			finally {
 				W.visible = false;
 				kids.forEach( ( o, i ) => { o.visible = was[ i ]; } );
+				instBack();
 			}
 			for ( const m of mats ) lvFurnWarmed.add( key( m ) );
 		}
@@ -6001,24 +6160,27 @@ function makeFlyControls( cam, dom, opts = null ) {
 		yaw = euler.y; pitch = euler.x;
 	};
 
-	/* `opts.freeLook`: while it holds (a visitor walking), one click in the
-	 * frame takes the pointer - Pointer Lock - and the view follows the
-	 * mouse with no button held, as in any first-person walk (user,
-	 * 2026-11-25: "when I walk I shouldn't have to hold to turn"). Esc gives
-	 * the cursor back for the page's buttons; the next click takes it again.
-	 * A pen or a finger keeps the drag. */
+	/* `opts.freeLook`: while it holds (a visitor walking), the view follows
+	 * the mouse with no button held, as in any first-person walk (user,
+	 * 2026-11-25: "when I walk I shouldn't have to hold to turn") - and the
+	 * cursor never goes away (owner, 2026-11-26: "the mouse must never
+	 * disappear while I walk"), so this is not Pointer Lock. A visible
+	 * cursor stops at the edge of the window, so resting it near the left
+	 * or right edge keeps the turn going. A pen or a finger keeps the drag. */
 	const freeLook = () => !! ( opts && opts.freeLook && opts.freeLook() );
-	const locked = () => document.pointerLockElement === dom;
-	const LOCK_RATE = 0.0022;          // radians per mouse count
+	const LOOK_RATE = 0.0026;          // radians per pixel
+	const EDGE = 0.06;                 // fraction of the width that turns on its own
+	const EDGE_RATE = 1.4;             // radians a second, right at the edge
+	let hoverX = - 1;                  // pointer across the frame, 0..1; -1 = not over it
+	const look = ( dx, dy ) => {
+		yaw -= dx * LOOK_RATE;
+		pitch -= dy * LOOK_RATE;
+		pitch = Math.max( - 1.45, Math.min( 1.45, pitch ) );
+		cam.quaternion.setFromEuler( euler.set( pitch, yaw, 0, 'YXZ' ) );
+	};
 	const down = ( e ) => {
 		if ( ! enabled || e.button !== 0 ) return;
-		if ( e.pointerType === 'mouse' && freeLook() ) {
-			if ( ! locked() && dom.requestPointerLock ) {
-				const r = dom.requestPointerLock();
-				if ( r && r.catch ) r.catch( () => {} );
-			}
-			if ( locked() || dom.requestPointerLock ) return;
-		}
+		if ( e.pointerType === 'mouse' && freeLook() ) return;
 		/* ...and somebody else may want the drag. Looking straight down at
 		 * a plan, turning the camera on the spot is not what a pointer
 		 * dragged across it means - sliding the storey along is - so the
@@ -6028,20 +6190,16 @@ function makeFlyControls( cam, dom, opts = null ) {
 		dom.setPointerCapture( e.pointerId );
 	};
 	const move = ( e ) => {
-		if ( locked() ) {
-			if ( ! enabled ) return;
-			yaw -= ( e.movementX || 0 ) * LOCK_RATE;
-			pitch -= ( e.movementY || 0 ) * LOCK_RATE;
-			pitch = Math.max( - 1.45, Math.min( 1.45, pitch ) );
-			cam.quaternion.setFromEuler( euler.set( pitch, yaw, 0, 'YXZ' ) );
+		if ( e.pointerType === 'mouse' && freeLook() && ! dragging ) {
+			const r = dom.getBoundingClientRect();
+			hoverX = r.width ? ( e.clientX - r.left ) / r.width : - 1;
+			if ( enabled ) look( e.movementX || 0, e.movementY || 0 );
 			return;
 		}
+		hoverX = - 1;
 		if ( ! dragging ) return;
-		yaw -= ( e.clientX - px ) * 0.0026;
-		pitch -= ( e.clientY - py ) * 0.0026;
-		pitch = Math.max( - 1.45, Math.min( 1.45, pitch ) );
+		look( e.clientX - px, e.clientY - py );
 		px = e.clientX; py = e.clientY;
-		cam.quaternion.setFromEuler( euler.set( pitch, yaw, 0, 'YXZ' ) );
 	};
 	const up = ( e ) => {
 		dragging = false;
@@ -6062,6 +6220,7 @@ function makeFlyControls( cam, dom, opts = null ) {
 
 	dom.addEventListener( 'pointerdown', down );
 	dom.addEventListener( 'pointermove', move );
+	dom.addEventListener( 'pointerleave', () => { hoverX = - 1; } );
 	addEventListener( 'pointerup', up );
 	dom.addEventListener( 'wheel', wheel, { passive: false } );
 	addEventListener( 'keydown', kd );
@@ -6078,9 +6237,12 @@ function makeFlyControls( cam, dom, opts = null ) {
 		 * over it - has to read the two angles the drag is holding. */
 		get look() { return { yaw, pitch }; },
 		update( dt ) {
-			// the walk is over (or the controls handed off): give the pointer back
-			if ( locked() && ( ! enabled || ! freeLook() ) ) document.exitPointerLock();
 			if ( ! enabled ) return;
+			// a cursor parked at the edge of the window keeps the walk turning
+			if ( freeLook() && hoverX >= 0 ) {
+				const t = hoverX < EDGE ? hoverX / EDGE - 1 : hoverX > 1 - EDGE ? ( hoverX - 1 + EDGE ) / EDGE : 0;
+				if ( t ) look( ( t * EDGE_RATE * dt ) / LOOK_RATE, 0 );
+			}
 			const shift = keys.has( 'ShiftLeft' ) || keys.has( 'ShiftRight' );
 			const fast = shift ? 3.4 : 1;
 			const s = SPEED * fast * dt;
@@ -6528,8 +6690,10 @@ function embedCursor( grabbing ) {
 	if ( ! EMBED || ! renderer ) return;
 	/* ...and `progress` while a clicked level is still on its way: the click
 	 * has been taken, the level is not on screen until it is here. */
+	/* ...and walking, the mouse turns the head with no button held, so
+	 * there is nothing to grab: a plain crosshair, always on screen. */
 	const want = lvWaiting ? 'progress' : ( fly && fly.enabled )
-		? ( grabbing ? 'grabbing' : 'grab' )
+		? ( bwOn ? 'crosshair' : grabbing ? 'grabbing' : 'grab' )
 		: ( ( floorHot || lvHotLevel || bwHot ) ? 'pointer' : 'default' );
 	if ( want === cursorSaid ) return;
 	cursorSaid = want;
@@ -6644,7 +6808,7 @@ function heroPose() {
 const RAIL_RISE = 7.0;
 const RAIL_A = { p: [ 10.91, 15.57 + RAIL_RISE, - 28.64 ], at: [ 6.57, 14.39 + RAIL_RISE, - 37.57 ] };
 const RAIL_B = { p: [ 45.98, 16.14 + RAIL_RISE, - 57.3 ], at: [ 37.4, 15.02 + RAIL_RISE, - 62.31 ] };
-const RAIL_SECS = + ( __q.get( 'rail' ) ?? 50 );   // one leg, seconds
+const RAIL_SECS = + ( __q.get( 'rail' ) ?? 230 );  // one leg, seconds (owner 2026-11-26, picked with ?rail=: 230)
 const RAIL_BOW = 26.0;       // metres the path bows away from the block, so
                              // the middle of the sweep still holds all of it
 const RAIL_LIFT = 2.5;       // ...and rises over the middle of the sweep
@@ -6657,9 +6821,14 @@ const RAIL_PIN_Y = + ( __q.get( 'pin' ) ?? 0.26 );
 /* ...and where across the window that corner stands, as a fraction of the
  * width. Pinning it is what keeps the gap between the type and the building
  * the same all the way round: the camera orbits, the composition does not. */
-/* 0.52 -> 0.46 -> 0.56 (user, 2026-11-25: at 0.46 the building sat on
- * the headline; "move it right by 10%"). */
-const RAIL_PIN_X = + ( __q.get( 'pinx' ) ?? 0.56 );
+/* 0.52 -> 0.46 -> 0.56 -> 0.66 -> 0.61 -> 0.55 (user, 2026-11-25 and again 2026-11-26:
+ * the building sat too near the headline; "move it right by 10%"; then
+ * "too much, a little left", and at 0.61 the front ran off the right). */
+const RAIL_PIN_X = + ( __q.get( 'pinx' ) ?? 0.55 );
+/* ...and it stays there the whole sweep: the corner must never pass under
+ * the headline (owner, 2026-11-26). `?pinxend=` lets it drift. */
+const RAIL_PIN_X_END = + ( __q.get( 'pinxend' ) ?? RAIL_PIN_X );
+let railPinX = RAIL_PIN_X;
 const RAIL_PAUSE = 1200;     // ms held still at each end - and at full size
 const RAIL_IDLE = 9000;      // ms after a drag before it picks up again
 const RAIL_REJOIN = 2600;    // ms easing back onto the rail
@@ -6698,11 +6867,84 @@ const _UP = new THREE.Vector3( 0, 1, 0 );
  * aiming at the middle of the block instead needed a lens pan of 0.73 and
  * the shot read as a shifted, skewed thing. The pins then trim the hundredth
  * that is left. */
-function railAim( p, out ) {
+/* The corner the frame holds: on the old sweep the block's near corner;
+ * along the front, whichever top corner of the building stands furthest
+ * LEFT as seen from where the camera is - so nothing of it ever passes
+ * under the headline, from one end of the sweep to the other. */
+let _roofPts = null;
+const _rcD = new THREE.Vector3(), _rcR = new THREE.Vector3(), _rcQ = new THREE.Vector3(), _rcOut = [ 0, 0, 0 ];
+function railCorner( p ) {
 	const c = meta && meta.block && meta.block.corner;
+	if ( ! RAIL_FRONT || ! c || ! meta.blocks || ! meta.frame ) return c;
+	if ( ! _roofPts ) {
+		const { origin: o, ex, ey } = meta.frame;
+		_roofPts = [];
+		for ( const b of meta.blocks ) for ( const [ x, y ] of b.footprint )
+			_roofPts.push( new THREE.Vector3( o[ 0 ] + ex[ 0 ] * x + ey[ 0 ] * y, b.parapet_z, o[ 2 ] + ex[ 2 ] * x + ey[ 2 ] * y ) );
+	}
+	const C = meta.block.center;
+	_rcD.set( C[ 0 ] - p.x, 0, C[ 2 ] - p.z ).normalize();
+	_rcR.copy( _rcD ).cross( _UP );
+	let best = null, bx = Infinity;
+	for ( const q of _roofPts ) {
+		_rcQ.copy( q ).sub( p );
+		const fwd = _rcQ.dot( _rcD );
+		if ( fwd <= 0 ) continue;
+		const x = _rcQ.dot( _rcR ) / fwd;
+		if ( x < bx ) { bx = x; best = q; }
+	}
+	if ( ! best ) return c;
+	_rcOut[ 0 ] = best.x; _rcOut[ 1 ] = best.y; _rcOut[ 2 ] = best.z;
+	return _rcOut;
+}
+
+/* Both corners in the window, wherever the camera is (owner, 2026-11-26:
+ * "in this position the house's right corner must show too"). From the
+ * street the whole 83 m front does not fit between the headline and the
+ * right edge, so where it does not, the camera backs straight away from the
+ * building's middle - and rises as it goes, RAIL_FIT_RISE m a metre, over the roofs across the
+ * street (15-32 m; it is never lower than 33 m out there) - just as far as
+ * it takes. Bisected, so the distance changes smoothly along the sweep. */
+const RAIL_FIT_R = + ( __q.get( 'fitr' ) ?? 0.95 );   // NDC: the building's right edge no further than 97.5% across
+const RAIL_FIT_RISE = + ( __q.get( 'fitrise' ) ?? 0.5 );
+const _fitP = new THREE.Vector3(), _fitT = new THREE.Vector3(), _fitQ = new THREE.Vector3();
+function railFits( p ) {
+	railAim( p, _fitT );
+	_plcam.position.copy( p );
+	_plcam.up.set( 0, 1, 0 );
+	_plcam.lookAt( _fitT );
+	_plcam.fov = FOV_Y;
+	_plcam.aspect = frameAspect();
+	_plcam.lensShift = 0; _plcam.lensPan = 0;
+	_plcam.updateProjectionMatrix();
+	_plcam.updateMatrixWorld( true );
+	_plcam.matrixWorldInverse.copy( _plcam.matrixWorld ).invert();
+	for ( const q of _roofPts ) {
+		_fitQ.copy( q ).project( _plcam );
+		if ( _fitQ.z < 1 && ( _fitQ.x > RAIL_FIT_R || _fitQ.y > 0.97 ) ) return false;
+	}
+	return true;
+}
+function railFit( p, orb ) {
+	railCorner( p );                       // builds _roofPts on first use
+	if ( ! _roofPts || ! orb.out ) return p;
+	if ( railFits( p ) ) return p;
+	// straight away from the building's middle: at the ends that is out along the side streets, not over the roofs
+	orb.out.set( p.x - orb.C.x, 0, p.z - orb.C.z ).normalize();
+	const at = ( d ) => _fitP.copy( p ).addScaledVector( orb.out, d ).setY( p.y + RAIL_FIT_RISE * d );
+	let lo = 0, hi = 160;
+	if ( railFits( at( hi ) ) ) for ( let i = 0; i < 18; i ++ ) {
+		const mid = ( lo + hi ) / 2;
+		if ( railFits( at( mid ) ) ) hi = mid; else lo = mid;
+	}
+	return p.copy( at( hi ) );
+}
+
+function railAim( p, out ) {
+	const c = railCorner( p );
 	if ( ! c ) return out;
 	const wantY = 1 - 2 * RAIL_PIN_Y;
-	const wantX = RAIL_PIN_X * 2 - 1;
+	const wantX = railPinX * 2 - 1;
 	const ty = Math.tan( FOV_Y * Math.PI / 360 );
 	_aimD.set( c[ 0 ], c[ 1 ], c[ 2 ] ).sub( p ).normalize();
 	_aimD.applyAxisAngle( _UP, Math.atan( wantX * ty * frameAspect() ) );
@@ -6720,7 +6962,7 @@ function railPin() {
 		camera.updateProjectionMatrix();
 		return;
 	}
-	const c = meta && meta.block && meta.block.corner;
+	const c = railCorner( camera.position );
 	if ( ! c ) return;
 	camera.lensShift = 0;
 	camera.lensPan = 0;
@@ -6729,7 +6971,7 @@ function railPin() {
 	camera.matrixWorldInverse.copy( camera.matrixWorld ).invert();
 	const base = _pinV.set( c[ 0 ], c[ 1 ], c[ 2 ] ).project( camera );
 	const wantY = 1 - 2 * RAIL_PIN_Y;
-	const wantX = RAIL_PIN_X * 2 - 1;
+	const wantX = railPinX * 2 - 1;
 	camera.lensShift = Math.max( - 1.2, Math.min( 1.2, base.y - wantY ) );
 	camera.lensPan = Math.max( - 0.9, Math.min( 0.9, wantX - base.x ) );
 	camera.updateProjectionMatrix();
@@ -6744,7 +6986,7 @@ const _plcam = new THREE.PerspectiveCamera();
 function railLens( p, q ) {
 	const hc = heroCand();
 	if ( hc ) return { shift: hc.shift, pan: hc.pan };
-	const c = meta && meta.block && meta.block.corner;
+	const c = railCorner( p );
 	if ( ! c ) return { shift: HERO_SHIFT, pan: 0 };
 	_plcam.position.copy( p );
 	_plcam.quaternion.copy( q );
@@ -6756,7 +6998,7 @@ function railLens( p, q ) {
 	const base = _pinV.set( c[ 0 ], c[ 1 ], c[ 2 ] ).project( _plcam );
 	return {
 		shift: Math.max( - 1.2, Math.min( 1.2, base.y - ( 1 - 2 * RAIL_PIN_Y ) ) ),
-		pan: Math.max( - 0.9, Math.min( 0.9, ( RAIL_PIN_X * 2 - 1 ) - base.x ) ),
+		pan: Math.max( - 0.9, Math.min( 0.9, ( railPinX * 2 - 1 ) - base.x ) ),
 	};
 }
 
@@ -6767,6 +7009,10 @@ function railLens( p, q ) {
  * Where the building then sits in the frame is not left to the aim - the two
  * pins put its corner at the same point of the window all the way round. */
 const RAIL_ZOOM = + ( __q.get( 'zoom' ) ?? 0.82 );
+const RAIL_FRONT = __q.get( 'railfront' ) !== '0';
+// where the sweep ends, plan x, y and eye height: the opening shot mirrored to block B's end, raised so block B's near top is not cut (`?railend=x,y,h`)
+const RAIL_FRONT_END = ( __q.get( 'railend' ) || '111,72,32' ).split( ',' ).map( Number );
+const RAIL_FRONT_UP = + ( __q.get( 'railup' ) ?? 24 );   // metres the curve's middle handles are raised
 let _orb = null;
 function railOrbit() {
 	const c = meta && meta.block && meta.block.center;
@@ -6787,11 +7033,29 @@ function railOrbit() {
 	_orb = { C, a0, a1,
 		r: Math.max( rad( _rA ), rad( _rB ) ) * RAIL_ZOOM,
 		y0: _rA.y, y1: _rB.y };
+	/* The sweep opens on the front - the rail's end b, loggias and shops to the street -
+	 * and turns on the way it always turned, round towards block B
+	 * (owner, 2026-11-26: "building start with front side", and when it
+	 * was run backwards from B to A, "you turn the camera the other way").
+	 * `?railfront=0`: the old A -> B arc, opening on the end wall. */
+	if ( RAIL_FRONT && meta.frame ) {
+		_orb.a0 = _orb.a1 = a1;
+		_orb.y0 = _orb.y1 = _rB.y;
+		const { origin: o, ex, ey } = meta.frame, [ x, y, h ] = RAIL_FRONT_END;
+		_orb.s = new THREE.Vector3( C.x + Math.cos( a1 ) * _orb.r, _rB.y, C.z + Math.sin( a1 ) * _orb.r );
+		_orb.e = new THREE.Vector3( o[ 0 ] + ex[ 0 ] * x + ey[ 0 ] * y, h, o[ 2 ] + ex[ 2 ] * x + ey[ 2 ] * y );
+		_orb.c1 = _orb.s.clone().lerp( _orb.e, 1 / 3 );
+		_orb.c2 = _orb.s.clone().lerp( _orb.e, 2 / 3 );
+		_orb.c1.y += RAIL_FRONT_UP; _orb.c2.y += RAIL_FRONT_UP;   // 3/4 of it at the middle
+		_orb.out = new THREE.Vector3();                             // set per pose by railFit
+		_orb.front = true;
+	}
 	return _orb;
 }
 
 function railPose( t ) {
-	const e = smoother( Math.min( 1, Math.max( 0, t ) ) ), u = 1 - e;
+	const tt = Math.min( 1, Math.max( 0, t ) ), e = smoother( tt ), u = 1 - e;
+	railPinX = RAIL_FRONT ? RAIL_PIN_X + ( RAIL_PIN_X_END - RAIL_PIN_X ) * e : RAIL_PIN_X;
 	const orb = railOrbit();
 	const hc = heroCand();
 	if ( hc && orb ) {
@@ -6814,6 +7078,24 @@ function railPose( t ) {
 		_rp.set( orb.C.x + Math.cos( a ) * orb.r,
 			orb.y0 + ( orb.y1 - orb.y0 ) * e,
 			orb.C.z + Math.sin( a ) * orb.r );
+		/* From the front: one corner to the other. It starts on the opening
+		 * shot off block A's end and ends on its mirror off block B's end
+		 * (RAIL_FRONT_END), down the street - clear from plan y 50 to 75, the
+		 * houses across it start at 78 - rising RAIL_FRONT_UP over the
+		 * middle. It sets off to the right at once (owner, 2026-11-26: "when
+		 * the turn starts the camera must start moving right straight
+		 * away"): most of its speed from the first frame, not the quintic's
+		 * slow start, and the first leg of the curve points along the
+		 * street, not out from the building. */
+		if ( orb.front ) {
+			// mostly even: the quintic alone runs the middle at nearly twice the average speed
+			const f = 0.8 * tt + 0.2 * e, g = 1 - f;
+			_rp.copy( orb.s ).multiplyScalar( g * g * g )
+				.addScaledVector( orb.c1, 3 * g * g * f )
+				.addScaledVector( orb.c2, 3 * g * f * f )
+				.addScaledVector( orb.e, f * f * f );
+			railFit( _rp, orb );
+		}
 		railAim( _rp, _rt );
 		_rcam.position.copy( _rp );
 		_rcam.up.set( 0, 1, 0 );

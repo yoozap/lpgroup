@@ -30,19 +30,29 @@ Triangles per kind at the default size (tri_count; re-run `python3
 blender/furn_kit_bed.py` to print this table):
 
     kind             default w x d      tris
-    bed_double       1.80 x 2.00       1698  (pillows=2: 1538, + throw=None: 1322, pillows=4: 1858)
-    nightstand       0.50 x 0.40        540  (lamp=0: 316)
-    kitchen_run      2.50 x 0.70        724  (+ sink cut-out + oven under the hob: 1032; 3.55 m: 1048)
+    bed_double       1.80 x 2.00       2054  (wall panel 320 of it; panel=0: 1734, throw=None: 1742, pillows=2: 1614)
+    nightstand       0.50 x 0.40        190  (the ledge; the drum at w < 0.45: 192)
+    kitchen_run      2.50 x 0.70        292  (handleless; + sink cut-out + oven under the hob: 456; 3.55 m: 400)
     sink             0.50 x 0.42        680
     hob              0.58 x 0.50        386  (glass + zones + hood, either hood)
     desk             1.40 x 0.70        332  (the L01 V desk outline: 294)
     office_chair     0.60 x 0.60       1254
     desk_equipment   0.47 x 0.35        744
-    wardrobe         1.80 x 0.60        218  (0.80 m: 110, 3.00 m: 326)
+    wardrobe         1.80 x 0.60        242  (0.80 m: 118, 3.00 m: 366)
+    vanity           1.10 x 0.75        732
     dresser          1.20 x 0.45       1162  (decor=0, mirror=0: 454)
     rug_bedroom      2.00 x 1.40         82
-    fridge_tower     0.60 x 0.70        142
-    oven_tower       0.60 x 0.70        520
+    fridge_tower     0.60 x 0.70        168  (black glass in walnut)
+    oven_tower       0.60 x 0.70        412
+
+The look follows the owner's renders (2026-11, wetransfer 4..13.png):
+low upholstered bed, white linen and a terracotta / greige throw, a padded
+channel panel on the wall, dark ledges or black drums at the bedside, white
+wardrobes with low flush bronze pulls, a walnut dressing table with a round
+glowing mirror; handleless kitchen with a marble top, a black fridge. No
+material here is new to web/materials.js; int_fabric_sofa, int_fabric_orange
+and int_brass are expected to be re-tinted there (greige, terracotta,
+bronze).
 """
 import math
 import random
@@ -396,6 +406,38 @@ def cushion(c, hx, hy, hz, rc, seg=3, prof=((-1.0, 0.6), (-0.72, 0.13), (0.0, 0.
     return g
 
 
+def pillow(hx, hy, hz, rc, seg=3):
+    """A bed pillow lying at the origin: one rounded-rectangle outline at the
+    seam, the same outline shrunk towards the middle as it rises to a plump
+    crown either side. Shrunk, not inset, so the corners stay round all the
+    way up (insetting them pinches four ridges, an envelope). Smooth."""
+    g = Geo()
+    base = rrect(0.0, 0.0, hx, hy, rc, seg)
+    rings = []
+    for t in (-80, -62, -40, 0, 40, 62, 80):
+        a = math.radians(t)
+        k = math.cos(a) ** 0.55
+        row = []
+        for p in base:
+            g.v.append([p[0] * k, p[1] * k, hz * math.sin(a)])
+            row.append(len(g.v) - 1)
+        rings.append(row)
+    n = len(base)
+    for A, B in zip(rings, rings[1:]):
+        for i in range(n):
+            j = (i + 1) % n
+            g.f.append(((A[i], A[j], B[j], B[i]), True))
+    g.v.append([0.0, 0.0, -hz])
+    cb = len(g.v) - 1
+    g.v.append([0.0, 0.0, hz])
+    ct = len(g.v) - 1
+    for i in range(n):
+        j = (i + 1) % n
+        g.f.append(((cb, rings[0][j], rings[0][i]), True))
+        g.f.append(((ct, rings[-1][i], rings[-1][j]), True))
+    return g
+
+
 def lathe(prof, n=12, c=(0.0, 0.0, 0.0), sx=1.0, sy=1.0, a0=0.0, smooth=True):
     """Profile [(r, z)] revolved about z. Go bottom-centre -> out -> up ->
     top-centre for a solid (outward faces); reverse it for an inward shell.
@@ -733,26 +775,63 @@ def soft_layer(u0, u1, vh, th, mx1, my, zm, R, zhem, foot=True, bulge=None, extr
 # =====================================================================
 # BEDROOM
 # =====================================================================
-def b_bed(K, w, d, rng, duvet='int_fabric_bluegrey', pillows=3, upholstery='int_fabric_sofa',
-          throw='int_fabric_dark', fold='int_fabric_white', deco=None, legs='int_wood_oak',
-          headboard_h=1.05, **_):
+def channel_panel(x0, T, ya, yb, z0, z1, cw=0.30, r=None):
+    """A padded wall panel standing on the wall plane x = x0, T thick, from
+    ya to yb across and z0..z1 high: a row of vertical upholstered
+    channels, each a rounded-front bolster with a soft top. ~40 tris a
+    channel; the backs press into the wall, the undersides are left out."""
+    g = Geo()
+    n = max(1, int(round((yb - ya) / cw)))
+    step = (yb - ya) / n
+    r = min(T * 0.9, step * 0.45) if r is None else r
+    for i in range(n):
+        cy = ya + step * (i + 0.5)
+        hy = step / 2 - 0.0015
+
+        def ring(ins, z):
+            return (rrect(x0 + T / 2, cy, T / 2 - ins * 0.5, hy - ins, max(0.003, r - ins), 1), z)
+        rings = [ring(0.0, z0), ring(0.0, z1 - 0.02), ring(0.014, z1)]
+        g.extend(loft(rings, smooth=True))
+        g.extend(cap(rings[-1][0], z1, up=True))
+    return g
+
+
+LINEN = 'int_fabric_white'
+RUST = 'int_fabric_orange'         # web: re-tint to terracotta (#94604e)
+GREIGE = 'int_fabric_sofa'         # web: re-tint to warm greige / boucle
+
+
+def b_bed(K, w, d, rng, duvet='int_fabric_white', pillows=4, upholstery='int_fabric_sofa',
+          throw='auto', fold='int_fabric_white', deco=None, legs=None, headboard_h=1.15,   # legs: unused (no legs now)
+          panel_ext=0.35, panel=1, **_):
+    """The owner's bed (renders 4, 5, 7, 12, 13): a low upholstered platform,
+    white linen, a terracotta (or greige) throw across the foot, white
+    pillows with one accent cushion, and in place of the bed's own
+    headboard a padded channel panel on the wall, wider than the bed so it
+    runs behind the side tables."""
     x0, x1 = -d / 2, d / 2
-    HB = 0.08
-    TOP = 0.55                    # mattress top
-    MB = 0.34                     # mattress bottom / base top
-    deco = deco or duvet
-    # headboard: one upholstered panel, rounded all round
-    K.add(upholstery, rbox((x0, -w / 2, 0.04), (x0 + HB, w / 2, headboard_h), 0.035, k=(1, 2, 2)))
-    # upholstered base on short tapered oak legs
-    bx0, bx1, by = x0 + HB, x1 - 0.04, w / 2 - 0.04
-    K.add(upholstery, rbox((bx0, -by, 0.12), (bx1, by, MB), 0.025, k=1))
-    for lx in (bx0 + 0.10, bx1 - 0.10):
-        for ly in (-by + 0.10, by - 0.10):
-            K.add(legs, lathe([(0, 0), (0.016, 0), (0.024, 0.12)], 7, c=(lx, ly, 0)))
+    HB = 0.06                     # the wall panel's depth
+    TOP = 0.50                    # mattress top
+    MB = 0.30                     # mattress bottom / platform top
+    # lib_furnish still hands the old teal / blue-grey duvet: the colour now
+    # only picks the throw (first bedroom terracotta, the others greige)
+    if throw == 'auto':
+        throw = GREIGE if duvet == 'int_fabric_bluegrey' else RUST
+    if duvet in ('int_fabric_teal', 'int_fabric_bluegrey', None):
+        duvet = LINEN
+    accent = deco or (throw if throw else GREIGE)
+    # the padded wall panel: channels from just under the mattress to 1.15
+    if panel:
+        ext = max(0.0, panel_ext)
+        K.add(upholstery, channel_panel(x0, HB, -w / 2 - ext, w / 2 + ext, MB - 0.06, headboard_h,
+                                        cw=0.30 if panel == 1 else 10.0))
+    # the platform: one soft block on the floor, set back 3 cm at the toe
+    bx0, bx1, by = x0 + HB, x1 - 0.03, w / 2 - 0.03
+    K.add(upholstery, rbox((bx0, -by, 0.0), (bx1, by, MB), 0.03, k=1, skip=('-z', '-x')))
     # mattress
     mx0, mx1, my_m = x0 + HB + 0.005, x1 - 0.05, w / 2 - 0.05
     RM = 0.045
-    K.add('int_fabric_white', rbox((mx0, -my_m, MB), (mx1, my_m, TOP), RM, k=1, skip=('-z',)))
+    K.add(LINEN, rbox((mx0, -my_m, MB), (mx1, my_m, TOP), RM, k=1, skip=('-z',)))
     # the duvet: on the mattress from the pillows to the foot, rolling over
     # the sides and the foot, a quilted puff in the middle
     th = 0.07
@@ -766,7 +845,7 @@ def b_bed(K, w, d, rng, duvet='int_fabric_bluegrey', pillows=3, upholstery='int_
         a = max(0.0, 1 - (v / ey) ** 2)
         b = max(0.0, 1 - ((u - uc) / uh) ** 2)
         return 0.018 * a * b
-    K.add(duvet, soft_layer(xs, None, None, th, ex, ey, zm, R, zhem=MB + 0.06, bulge=bulge,
+    K.add(duvet, soft_layer(xs, None, None, th, ex, ey, zm, R, zhem=MB + 0.05, bulge=bulge,
                             ucuts=[uc], vcuts=[0.0]))
     # the top sheet turned down over the duvet's head end
     t2 = 0.026
@@ -780,95 +859,99 @@ def b_bed(K, w, d, rng, duvet='int_fabric_bluegrey', pillows=3, upholstery='int_
         return (p[0], p[1], p[2] - k * th)
     K.add(fold, soft_layer(u0, xs + 0.30, None, t2, ex, ey, zm2, R2, zhem=TOP - 0.02, foot=False,
                            bulge=bulge, extra=roll, ucuts=[xs - 0.03, xs], vcuts=[0.0]))
-    # a throw across the foot
+    # the throw: a runner across the foot, over the sides and the foot end
     if throw:
-        t3 = 0.016
+        t3 = 0.018
         zm3 = zm + th / 2 + t3 / 2
         R3 = R + th / 2 + t3 / 2
-        ta, tb = ex - 0.62, ex - 0.12
-        K.add(throw, soft_layer(ta, tb, None, t3, ex, ey, zm3, R3, zhem=MB + 0.12, foot=False,
+        ta = ex - 0.62
+        K.add(throw, soft_layer(ta, None, None, t3, ex, ey, zm3, R3, zhem=MB + 0.10, foot=True,
                                 bulge=bulge, vcuts=[0.0]))
-    # pillows: two to sleep on, leaning on the headboard, then cushions
+    # pillows, dressed as a made bed is: two sleeping pillows propped on
+    # their long edge against the wall panel, two smaller ones leaning on
+    # them in front (pillows=3: one lumbar cushion instead), each sunk a
+    # little into the linen so none of them floats
     npl = int(max(2, min(4, pillows)))
-    py = min(0.72, my_m - 0.03)             # one pillow's length across
-    pcx = mx0 + 0.27
-    for s in (-1, 1):
-        g = spe((0, 0, 0), 0.25, py / 2, 0.08, e1=1.45, e2=0.42, nu=12, nv=6)
-        g.roty(math.radians(16 + rng.uniform(-3, 3)))
+    py = min(0.70, my_m - 0.04)             # one pillow's length across
+    wall = x0 + HB                          # the panel's face
+
+    def prop(hx, hy, hz, lean, y, xb, m):
+        # made lying, stood on its long edge leaning `lean` degrees back
+        # towards the panel, its back edge at xb
+        g = pillow(hx, hy, hz, 0.09, seg=4)
+        g.roty(math.radians(-(90 - lean) + rng.uniform(-2, 2)))
         g.rotz(math.radians(rng.uniform(-3, 3)))
         (a, b) = g.bbox()
-        g.move(pcx, s * (py / 2 + 0.012), TOP - a[2] - 0.012)
-        (a, b) = g.bbox()
-        if a[0] < x0 + HB + 0.005:
-            g.move(x0 + HB + 0.005 - a[0], 0, 0)
-        K.add('int_fabric_white', g)
-    cushions = []
+        g.move(xb - a[0], y - (a[1] + b[1]) / 2, TOP - a[2] - 0.02)
+        K.add(m, g)
+    for s in (-1, 1):
+        prop(0.23, py / 2 - 0.01, 0.075, 24, s * (py / 2 + 0.01), wall - 0.01, LINEN)
     if npl == 3:
-        cushions = [(0.0, 0.50, 0.30)]          # a lumbar cushion in the middle
+        prop(0.15, 0.27, 0.06, 34, 0.0, wall + 0.19, accent)
     elif npl == 4:
-        cushions = [(-1, 0.44, 0.44), (1, 0.44, 0.44)]
-    for (s, cy, cz) in cushions:
-        # made lying (seam round its thin axis), then stood up, leaning back
-        g = spe((0, 0, 0), cz / 2, cy / 2, 0.075, e1=1.4, e2=0.62, nu=16, nv=6)
-        g.roty(math.radians(-(90 - 24) + rng.uniform(-4, 4)))
-        g.rotx(math.radians(rng.uniform(-4, 4)))
-        (a, b) = g.bbox()
-        yy = s * min(py / 2, my_m - 0.25)
-        g.move(pcx + 0.17 - (a[0] + b[0]) / 2, yy, TOP - a[2] - 0.015)
-        K.add(deco, g)
+        for s in (-1, 1):
+            prop(0.20, 0.25, 0.065, 34, s * (py / 2 + 0.01) + rng.uniform(-0.03, 0.03), wall + 0.17, LINEN)
 
 
-def b_nightstand(K, w, d, rng, h=0.52, body='int_white_gloss', front='int_wood_oak', top='int_wood_oak',
-                 lamp=1, lamp_side=0.0, **_):
+def b_nightstand(K, w, d, rng, h=0.52, style=-1, body='int_stone_dark', front='int_black', top='int_wood_walnut',
+                 lamp=0, lamp_side=0.0, **_):
+    """Bedside, as the renders have it: (0) a dark floating ledge low on
+    the wall (5, 6, 7, 9, 13) or (1) a round black drum (4, 11, 12). style -1
+    picks by size (the drawn box is one size per plan type, so a flat's two
+    sides match): ledge from 0.45 m across, the drum under it."""
     x0, x1, y0, y1 = -d / 2, d / 2, -w / 2, w / 2
-    LEG = 0.17
-    T = 0.022
-    zt = h - T
-    # tapered, slightly splayed oak legs
-    for lx in (x0 + 0.045, x1 - 0.045):
-        for ly in (y0 + 0.045, y1 - 0.045):
-            ox = math.copysign(0.012, lx)
-            oy = math.copysign(0.012, ly)
-            K.add(top, sweep([(lx + ox, ly + oy, 0.0), (lx, ly, LEG + 0.004)], [0.0095, 0.0145], n=7, cap1=False)
-                  .map(lambda x, y, z: (x, y, max(0.0, z))))
-    P = 0.016
-    B = body
-    K.add(B, box((x0, y0, LEG), (x1, y1, LEG + P)))                         # bottom
-    K.add(B, box((x0, y0, LEG + P), (x1, y0 + P, zt)))                      # sides
-    K.add(B, box((x0, y1 - P, LEG + P), (x1, y1, zt)))
-    K.add(B, box((x0, y0 + P, LEG + P), (x0 + P, y1 - P, zt), skip=('-x',)))  # back
-    mid = LEG + (zt - LEG) * 0.46
-    K.add(B, box((x0 + P, y0 + P, mid - P), (x1 - 0.002, y1 - P, mid)))       # shelf
-    K.add(B, box((x0 + P, y0 + P, mid), (x1 - 0.02, y1 - P, zt), skip=('+z', '-z', '-y', '+y')))  # drawer box face
-    # oak top, a soft edge
-    K.add(top, chbox((x0 - 0.004, y0 - 0.004, zt), (x1 + 0.006, y1 + 0.004, h), 0.004))
-    # the drawer front, set in between the sides
-    K.add(front, cbox((x1 - 0.018, y0 + P + 0.002, mid + 0.002), (x1 + 0.002, y1 - P - 0.002, zt - 0.002), 0.003))
-    K.add('int_brass', lathe([(0, 0), (0.006, 0), (0.006, 0.012), (0.012, 0.018), (0.011, 0.024), (0, 0.025)], 8,
-                             c=(0, 0, 0)).roty(math.pi / 2).move(x1 + 0.002, 0, (mid + zt) / 2))
-    # a book lying in the niche
-    bw = min(0.22, w - 2 * P - 0.06)
-    K.add('int_accent_red', chbox((x0 + 0.05, -bw / 2, LEG + P), (min(x1 - 0.04, x0 + 0.05 + 0.16), bw / 2, LEG + P + 0.03), 0.003))
-    # the lamp: a bellied ceramic base, brass stem, a drum shade that glows
+    st = int(style)
+    if st < 0:
+        st = 0 if w >= 0.45 else 1
+    if st == 0:
+        za, zb = 0.24, 0.40
+        xd = min(x1, x0 + 0.40)
+        K.add(body, chbox((x0, y0 + 0.01, za), (xd, y1 - 0.01, zb), 0.006))
+        # an open slot along the front, in shadow
+        K.add(front, box((xd - 0.0008, y0 + 0.06, za + 0.035), (xd + 0.0005, y1 - 0.06, zb - 0.035),
+                         skip=('-x', '-y', '+y', '-z', '+z')))
+        # a ceramic bud vase and a book on it
+        vx, vy = x0 + 0.16, (y1 - 0.12) if lamp_side >= 0 else (y0 + 0.12)
+        prof = [(0, 0), (0.03, 0), (0.045, 0.05), (0.04, 0.10), (0.016, 0.15), (0.02, 0.16), (0, 0.155)]
+        K.add('int_ceramic', lathe([(r, zb + z) for r, z in prof], 10, c=(vx, vy, 0)))
+        by = -vy * 0.4
+        K.add(LINEN, chbox((x0 + 0.07, by - 0.11, zb), (x0 + 0.28, by + 0.11, zb + 0.028), 0.003))
+        hl = zb + 0.16
+    else:
+        r = max(0.14, min(0.20, min(w, d) / 2 - 0.01))
+        cx = x0 + r + 0.01
+        H = 0.50
+        K.add(front, lathe([(0, 0.0), (r - 0.004, 0.0), (r, 0.006), (r, H - 0.012), (r - 0.006, H - 0.006)], 16,
+                           c=(cx, 0, 0)))
+        K.add('metal_dark', lathe([(r - 0.006, H - 0.006), (r - 0.004, H), (r - 0.022, H), (0, H - 0.004)], 16,
+                                  c=(cx, 0, 0), smooth=False))
+        hl = H
+        x0 = cx - r
+    # the old table lamp, only on request (lamp=1)
     if lamp:
-        lx = x0 + max(0.13, min(d * 0.5, 0.18))
-        ly = max(-(w / 2 - 0.12), min(w / 2 - 0.12, lamp_side * (w / 2 - 0.12)))
-        z = h
+        lx = x0 + 0.13
+        ly = 0.0
+        z = hl
         base = [(0, 0), (0.045, 0), (0.064, 0.05), (0.058, 0.12), (0.03, 0.16), (0.012, 0.176), (0.0, 0.178)]
-        K.add('int_ceramic', lathe([(r, z + zz) for r, zz in base], 12, c=(lx, ly, 0)))
-        K.add('int_brass', lathe([(0, z + 0.175), (0.006, z + 0.175), (0.006, z + 0.36), (0, z + 0.36)], 8, c=(lx, ly, 0)))
-        sr = min(0.13, w / 2 - 0.01)
-        K.add('int_lamp_shade', lathe([(sr, z + 0.25), (sr * 0.84, z + 0.43)], 18, c=(lx, ly, 0)))
-        K.add('int_brass', lathe([(sr * 0.84 + 0.001, z + 0.425), (sr * 0.84 + 0.001, z + 0.43)], 18, c=(lx, ly, 0), smooth=False))
+        K.add('int_ceramic', lathe([(r_, z + zz) for r_, zz in base], 12, c=(lx, ly, 0)))
+        K.add('int_lamp_shade', lathe([(0.12, z + 0.25), (0.10, z + 0.43)], 18, c=(lx, ly, 0)))
+        K.add('metal_dark', lathe([(0, z + 0.175), (0.006, z + 0.175), (0.006, z + 0.36), (0, z + 0.36)], 8, c=(lx, ly, 0)))
 
 
-def b_wardrobe(K, w, d, rng, h=2.30, front='int_white_gloss', body='int_white_gloss', handle='int_brass', **_):
+def inset_pull(xf, yc, zc, L, wd=0.025):
+    """A flush vertical bronze pull: a slim bar 6 mm proud of the face x = xf
+    with soft ends. 28 tris."""
+    return chbox((xf - 0.002, yc - wd / 2, zc - L / 2), (xf + 0.006, yc + wd / 2, zc + L / 2), 0.002)
+
+
+def b_wardrobe(K, w, d, rng, h=2.30, front='int_white_gloss', body='int_white_gloss', handle='int_brass',
+               pull_z=0.55, pull_l=0.45, **_):
     x0, x1, y0, y1 = -d / 2, d / 2, -w / 2, w / 2
-    PL = 0.08
+    PL = 0.06
     fx = x1                       # door face
     FT = 0.019
     P = 0.018
-    K.add('int_black', box((x0, y0 + 0.01, 0), (fx - FT - 0.05, y1 - 0.01, PL), skip=('-z',)))
+    K.add('int_black', box((x0, y0 + 0.01, 0), (fx - FT - 0.04, y1 - 0.01, PL), skip=('-z',)))
     K.add(body, box((x0, y0, PL), (fx - FT - 0.003, y0 + P, h)))                 # sides
     K.add(body, box((x0, y1 - P, PL), (fx - FT - 0.003, y1, h)))
     K.add(body, box((x0, y0 + P, h - P), (fx - FT - 0.003, y1 - P, h), skip=('-z',)))  # top
@@ -880,12 +963,53 @@ def b_wardrobe(K, w, d, rng, h=2.30, front='int_white_gloss', body='int_white_gl
     for i in range(n):
         a, b = y0 + i * dw + gap / 2, y0 + (i + 1) * dw - gap / 2
         K.add(front, cbox((fx - FT, a, PL + gap), (fx, b, h - gap)))
-        # pulls at the meeting edges: a door's pull is on the side away from its hinge
+        # flush bronze pulls at the meeting edges, low on the door (render 4):
+        # a door's pull is on the side away from its hinge
         if n == 1:
-            yc = b - 0.06
+            yc = b - 0.045
         else:
-            yc = (b - 0.06) if i % 2 == 0 else (a + 0.06)
-        K.add(handle, handle_bar(fx, yc, 1.05, 0.40, vertical=True, rad=0.007, stand=0.03))
+            yc = (b - 0.045) if i % 2 == 0 else (a + 0.045)
+        K.add(handle, inset_pull(fx, yc, pull_z, pull_l))
+
+
+def b_vanity(K, w, d, rng, wood='int_wood_walnut', stool='int_fabric_sofa', h=0.76, light=1, **_):
+    """A dressing table (renders 4, 5, 11, 12): a floating walnut top with a
+    shallow drawer box, a round mirror on the wall with a warm halo behind
+    it, an upholstered stool tucked half under. ~800 tris."""
+    x0, x1, y0, y1 = -d / 2, d / 2, -w / 2, w / 2
+    TD = min(0.42, d - 0.20)       # the top's depth off the wall
+    T = 0.035
+    xt = x0 + TD
+    # the top and a drawer box hung under it (wall-hung, no legs)
+    K.add(wood, chbox((x0, y0, h - T), (xt, y1, h), 0.004))
+    dw = min(w - 0.10, 0.70)
+    K.add(wood, chbox((x0, -dw / 2, h - T - 0.13), (xt - 0.03, dw / 2, h - T + 0.001), 0.003))
+    K.add('int_black', box((xt - 0.0305, -dw / 2 + 0.01, h - T - 0.012), (xt - 0.029, dw / 2 - 0.01, h - T - 0.004),
+                           skip=('-x', '-y', '+y', '-z', '+z')))
+    # on the top: a tray, a bottle, a small vase
+    K.add('metal_dark', slab(rrect(x0 + 0.16, y1 - 0.22, 0.09, 0.13, 0.03, 2), h, h + 0.012, 0.0, skip_bottom=True))
+    K.add('int_ceramic', lathe([(0, 0), (0.024, 0), (0.026, 0.07), (0.012, 0.09), (0.012, 0.11), (0, 0.11)], 10,
+                               c=(x0 + 0.14, y1 - 0.18, h + 0.012)))
+    K.add('int_pot', lathe([(0, 0), (0.035, 0), (0.05, 0.06), (0.03, 0.13), (0.022, 0.16), (0, 0.155)], 12,
+                           c=(x0 + 0.12, y0 + 0.16, h)))
+    # the round mirror on the wall above, a glowing ring 8 mm outside it
+    rr = max(0.22, min(0.32, w * 0.28))
+    zc = h + 0.22 + rr
+    if light:
+        K.add('int_lamp_shade', lathe([(0, 0), (rr + 0.010, 0), (rr + 0.010, 0.010), (0, 0.010)], 28)
+              .roty(math.pi / 2).move(x0 + 0.001, 0, zc))
+    K.add('int_mirror', lathe([(0, 0), (rr, 0), (rr, 0.022), (0, 0.022)], 28).roty(math.pi / 2).move(x0 + 0.004, 0, zc))
+    # the stool: a round upholstered seat on four black legs, half under the top
+    sr = 0.21
+    sx = min(x1 - sr - 0.01, xt + 0.02)
+    SH = 0.46
+    seat = cushion((sx, 0.0, SH - 0.045), sr, sr, 0.045, sr * 0.98, seg=3)
+    K.add(stool, seat)
+    for k in range(4):
+        a = TAU * k / 4 + math.pi / 4
+        p0 = (sx + 0.17 * math.cos(a), 0.17 * math.sin(a), 0.0)
+        p1 = (sx + 0.13 * math.cos(a), 0.13 * math.sin(a), SH - 0.085)
+        K.add('int_black', sweep([p0, p1], [0.010, 0.013], n=6, cap0=False, cap1=False))
 
 
 def b_dresser(K, w, d, rng, h=0.80, wood='int_wood_walnut', legs='int_wood_walnut', knobs='int_brass',
@@ -1086,7 +1210,7 @@ def _base_fronts(K, ya, yb, kind, fx, front, handle):
     def panel(za, zb, aa=a, bb=b, mat=front, pull=True):
         K.add(mat, cbox((fx - FT, aa, za), (fx, bb, zb)))
         LL = min(0.32, bb - aa - 0.12)
-        if pull and LL > 0.07:
+        if handle and pull and LL > 0.07:
             K.add(handle, handle_bar(fx, (aa + bb) / 2, zb - 0.038, LL))
     if kind == 'drawers':
         zt = z1 - 0.165
@@ -1101,20 +1225,20 @@ def _base_fronts(K, ya, yb, kind, fx, front, handle):
         zo = z1 - 0.12
         panel(zo + g / 2, z1)
         # a built-in oven: brushed fascia with two knobs, black glass door
-        K.add('frame_light', cbox((fx - FT, a, zo - 0.085), (fx - 0.002, b, zo - g / 2)))
+        K.add('chrome', cbox((fx - FT, a, zo - 0.085), (fx - 0.002, b, zo - g / 2)))
         for s in (-1, 1):
             K.add('int_black', lathe([(0, 0), (0.016, 0), (0.016, 0.018), (0, 0.02)], 10).roty(math.pi / 2)
                   .move(fx - 0.002, yc + s * wd * 0.33, zo - 0.043))
         K.add('int_black', box((fx - 0.003, yc - 0.05, zo - 0.058), (fx - 0.0015, yc + 0.05, zo - 0.028), skip=('-x',)))
         K.add('int_black', cbox((fx - FT, a, z0 + 0.012), (fx, b, zo - 0.088), 0.003))
-        K.add('frame_light', handle_bar(fx, yc, zo - 0.125, wd - 0.10, rad=0.008, stand=0.035))
+        K.add('metal_dark', handle_bar(fx, yc, zo - 0.125, wd - 0.10, rad=0.008, stand=0.035))
     else:
         panel(z0, z1)
 
 
 def b_kitchen_run(K, w, d, rng, upper=True, profile=None, sink_x=None, sink_y=None, hob_x=None, hob_y=None,
-                  front='int_white_gloss', body='int_white_gloss', top='int_mint', splash=None,
-                  handle='int_brass', seed=0, **_):
+                  front='int_white_gloss', body='int_white_gloss', top='int_marble', splash=None,
+                  handle=None, seed=0, **_):
     x1 = d / 2
     FT = 0.018
     fx = x1 - 0.025                           # front face of the doors
@@ -1185,11 +1309,11 @@ def b_kitchen_run(K, w, d, rng, upper=True, profile=None, sink_x=None, sink_y=No
                     seg = [s for s in ug if s[0] <= (a + b) / 2 <= s[1]]
                     xff = x1 - (seg[0][2] if seg else ug[0][2]) + KZ['updep']
                     LL = min(0.32, b - a - 0.12)
-                    if LL > 0.07:
+                    if handle and LL > 0.07:
                         K.add(handle, handle_bar(xff, (a + b) / 2, KZ['up0'] + 0.04, LL))
 
 
-def b_sink(K, w, d, rng, wall=0.38, bowl='frame_light', tap='chrome', **_):
+def b_sink(K, w, d, rng, wall=0.38, bowl='chrome', tap='chrome', **_):
     """Inset stainless bowl and a gooseneck mixer. Needs the run's worktop
     cut out under it (kitchen_run sink_x/sink_y)."""
     Z = KZ['top1']
@@ -1250,7 +1374,7 @@ def b_sink(K, w, d, rng, wall=0.38, bowl='frame_light', tap='chrome', **_):
                      [0.0105, 0.008, 0.0065], n=8, cap0=False, up=(0.0, 0.0, 1.0)))
 
 
-def b_hob(K, w, d, rng, wall=0.38, upper=True, ceiling=3.0, hood=1, glass='int_black', steel='frame_light', **_):
+def b_hob(K, w, d, rng, wall=0.38, upper=True, ceiling=3.0, hood=1, glass='int_black', steel='chrome', **_):
     """Black glass induction hob with printed zones, the hood above it on
     the wall: a slim pull-out canopy under the wall cabinets (upper) or a
     chimney hood to the ceiling (no wall cabinets)."""
@@ -1291,7 +1415,7 @@ def b_hob(K, w, d, rng, wall=0.38, upper=True, ceiling=3.0, hood=1, glass='int_b
         K.add(steel, box((wx + 0.001, -0.13, zc + 0.06), (wx + 0.25, 0.13, ceiling - 0.001), skip=('-x', '-z', '+z')))
 
 
-def b_tower(K, w, d, rng, kind='fridge', h=2.20, front='int_white_gloss', body='int_white_gloss', handle='int_brass',
+def b_tower(K, w, d, rng, kind='fridge', h=2.20, front='int_white_gloss', body='int_white_gloss', handle=None,
             hand=1, **_):
     """A tall unit for the end of a kitchen run: an integrated fridge-freezer
     or an oven + combi stack. Plinth, fronts and top line up with
@@ -1315,10 +1439,15 @@ def b_tower(K, w, d, rng, kind='fridge', h=2.20, front='int_white_gloss', body='
         K.add(mat, cbox((fx - FT, a, z0), (fx, b, z1)))
     if kind == 'fridge':
         zm = PL + 0.72
+        # a black glass fridge (render 4): two doors, recessed dark pulls,
+        # a small lit display
         panel(PL + g / 2, zm - g / 2)
         panel(zm + g / 2, h - g / 2)
-        K.add(handle, handle_bar(fx, ys, zm - 0.20, 0.30, vertical=True, rad=0.007, stand=0.03))
-        K.add(handle, handle_bar(fx, ys, zm + 0.30, 0.45, vertical=True, rad=0.007, stand=0.03))
+        hm = handle or 'metal_dark'
+        K.add(hm, inset_pull(fx, ys, zm - 0.18, 0.30, 0.02))
+        K.add(hm, inset_pull(fx, ys, zm + 0.36, 0.60, 0.02))
+        if front == 'int_black':
+            K.add('int_lamp_shade', box((fx, yc - 0.05, zm + 0.62), (fx + 0.001, yc + 0.05, zm + 0.66), skip=('-x',)))
     else:
         zo0, zo1 = 0.50, 1.10                 # oven
         zc0, zc1 = 1.10, 1.55                 # compact combi
@@ -1326,17 +1455,19 @@ def b_tower(K, w, d, rng, kind='fridge', h=2.20, front='int_white_gloss', body='
         panel(PL + g / 2, PL + dz - g / 2)
         panel(PL + dz + g / 2, zo0 - g / 2)
         for (za, zb) in ((PL, PL + dz), (PL + dz, zo0)):
-            K.add(handle, handle_bar(fx, yc, zb - 0.04, min(0.32, w - 0.14)))
+            if handle:
+                K.add(handle, handle_bar(fx, yc, zb - 0.04, min(0.32, w - 0.14)))
         for (za, zb) in ((zo0, zo1), (zc0, zc1)):
-            K.add('frame_light', cbox((fx - FT, a, zb - 0.085), (fx - 0.002, b, zb - g / 2)))
+            K.add('chrome', cbox((fx - FT, a, zb - 0.085), (fx - 0.002, b, zb - g / 2)))
             K.add('int_black', box((fx - 0.003, yc - 0.06, zb - 0.06), (fx - 0.0015, yc + 0.06, zb - 0.03), skip=('-x',)))
             for s in (-1, 1):
                 K.add('int_black', lathe([(0, 0), (0.016, 0), (0.016, 0.018), (0, 0.02)], 10).roty(math.pi / 2)
                       .move(fx - 0.002, yc + s * (w * 0.33), zb - 0.045))
             K.add('int_black', cbox((fx - FT, a, za + g / 2), (fx, b, zb - 0.088), 0.003))
-            K.add('frame_light', handle_bar(fx, yc, zb - 0.125, w - 0.12, rad=0.008, stand=0.035))
+            K.add('metal_dark', handle_bar(fx, yc, zb - 0.125, w - 0.12, rad=0.008, stand=0.035))
         panel(zc1 + g / 2, h - g / 2)
-        K.add(handle, handle_bar(fx, yc, zc1 + 0.045, min(0.32, w - 0.14)))
+        if handle:
+            K.add(handle, handle_bar(fx, yc, zc1 + 0.045, min(0.32, w - 0.14)))
 
 
 # =====================================================================
@@ -1509,25 +1640,30 @@ def b_desk_equipment(K, w, d, rng, desk_h=0.75, lamp=1, lamp_y=0.36, kb=0.21, **
 KINDS = {
     'bed_double': dict(
         drawn=True, wall=True, solid=True,
-        params=dict(duvet=('int_fabric_bluegrey', None, None), pillows=(3, 2, 4), upholstery=('int_fabric_sofa', None, None),
-                    throw=('int_fabric_dark', None, None), fold=('int_fabric_white', None, None), deco=(None, None, None),
-                    legs=('int_wood_oak', None, None), headboard_h=(1.05, 0.90, 1.30)),
+        params=dict(duvet=('int_fabric_white', None, None), pillows=(4, 2, 4), upholstery=('int_fabric_sofa', None, None),
+                    throw=('auto', None, None), fold=('int_fabric_white', None, None), deco=(None, None, None),
+                    legs=(None, None, None), headboard_h=(1.15, 0.90, 1.30), panel_ext=(0.35, 0.0, 0.8), panel=(1, 0, 2)),
         footprint='w = across (local Y, the bed\'s width 1.40-2.00), d = along (local X, length 1.90-2.20); '
-                  'headboard at -X on the wall, foot at +X. The duvet hangs ~2 cm outside the box at the sides and foot.',
-        notes='pillows: 2 sleeping pillows, 3 adds a lumbar cushion, 4 two square cushions (deco material, default the '
-              'duvet\'s). throw=None leaves the foot throw out. Pass the existing teal / blue-grey duvet param.'),
+                  'the wall panel at -X (6 cm deep, on the wall), foot at +X. The duvet and throw hang ~2 cm outside '
+                  'the box at the sides and foot; the wall panel runs panel_ext past each side (behind the side tables).',
+        notes='Low platform (mattress top 0.50), white linen. duvet: teal / blue-grey (what lib_furnish still passes) are '
+              'read as white linen and only pick the throw: teal -> terracotta int_fabric_orange, blue-grey -> greige '
+              'int_fabric_sofa; throw=None leaves it out, a material name forces it. pillows: 2 sleeping pillows, 3 adds '
+              'a lumbar cushion, 4 two euro squares + a small accent cushion (deco, default the throw). panel: 0 none, '
+              '1 vertical channels (render 4), 2 one plain padded slab; panel_ext 0 keeps it to the bed\'s width.'),
     'nightstand': dict(
         drawn=True, wall=True, solid=True,
-        params=dict(h=(0.52, 0.45, 0.62), lamp=(1, 0, 1), lamp_side=(0.0, -1.0, 1.0),
-                    body=('int_white_gloss', None, None), front=('int_wood_oak', None, None), top=('int_wood_oak', None, None)),
-        footprint='w = across (local Y, 0.35-0.60), d = along (local X, 0.28-0.50); back at -X on the wall, the drawer faces +X.',
-        notes='lamp_side -1..1 slides the lamp from right (-Y) to left (+Y); for a nightstand on the bed\'s left '
-              '(+Y of the bed) pass -1 to keep the lamp near the bed, or 0 (centre) when unknown.'),
+        params=dict(h=(0.52, 0.45, 0.62), style=(-1, -1, 1), lamp=(0, 0, 1), lamp_side=(0.0, -1.0, 1.0),
+                    body=('int_stone_dark', None, None), front=('int_black', None, None), top=('int_wood_walnut', None, None)),
+        footprint='w = across (local Y, 0.35-0.60), d = along (local X, 0.28-0.50); back at -X on the wall.',
+        notes='style 0: a dark floating ledge 0.24-0.40 (int_stone_dark) with a bud vase and a book; 1: a black drum '
+              'side table 0.50 high, metal_dark top ring; -1 (default): ledge when w >= 0.45, else the drum. lamp=1 '
+              'adds the old table lamp. lamp_side -1..1 puts the vase right (-Y) or left (+Y).'),
     'kitchen_run': dict(
         drawn=True, wall=True, solid=True,
         params=dict(upper=(True, None, None), profile=(None, None, None), sink_x=(None, -0.2, 0.2), sink_y=(None, -3.0, 3.0),
                     hob_x=(None, -0.2, 0.2), hob_y=(None, -3.0, 3.0), front=('int_white_gloss', None, None),
-                    top=('int_mint', None, None), handle=('int_brass', None, None), splash=(None, None, None), seed=(0, 0, 99)),
+                    top=('int_marble', None, None), handle=(None, None, None), splash=(None, None, None), seed=(0, 0, 99)),
         footprint='w = across (local Y, the run\'s length 0.30-6.00), d = along (local X, the drawn depth 0.45-0.90); '
                   'worktop front at +X = d/2, wall at -X. profile = lib_furnish.kitchen_profile strips [[y0, y1, depth from the front]].',
         notes='Pass sink_y (and sink_x) in the RUN\'s local frame (to_local(sink.at, run.centre, run.rot)) to cut the '
@@ -1535,7 +1671,7 @@ KINDS = {
               '1.45-2.20 where upper (and the strip is >= 0.35 deep); splashback only where upper (no window).'),
     'sink': dict(
         drawn=True, wall=False, solid=False,
-        params=dict(bowl=('frame_light', None, None), tap=('chrome', None, None)),
+        params=dict(bowl=('chrome', None, None), tap=('chrome', None, None)),
         footprint='the fixed module box [0.50 across, 0.42 along] lib_furnish gives; w, d are ignored. Origin at the '
                   'sink\'s spot on the floor; the rim sits on the worktop (z 0.90), the tap at -X (towards the wall).',
         notes='Needs the worktop cut-out: kitchen_run(sink_x=..., sink_y=...) - without it the bowl is hidden under a solid top.'),
@@ -1564,9 +1700,20 @@ KINDS = {
         notes='Stands on the desk top (desk_h). In the L01 V-desks the box sits in the V; lamp_y 0.36 keeps the lamp on the left arm.'),
     'wardrobe': dict(
         drawn=False, wall=True, solid=True,
-        params=dict(h=(2.30, 1.90, 2.70), front=('int_white_gloss', None, None), handle=('int_brass', None, None)),
+        params=dict(h=(2.30, 1.90, 2.70), front=('int_white_gloss', None, None), body=('int_white_gloss', None, None),
+                    handle=('int_brass', None, None), pull_z=(0.55, 0.30, 1.20), pull_l=(0.45, 0.20, 0.80)),
         footprint='w = across (local Y, 0.6-3.0), d = along (local X, 0.55-0.65); doors at +X, back on the wall at -X.',
-        notes='One door per ~0.55 m, vertical brass pulls at the meeting edges. front=int_wood_oak for oak doors.'),
+        notes='One door per ~0.55 m, flush vertical bronze (int_brass) pulls 0.45 long, low (centre 0.55) at the '
+              'meeting edges as in render 4. front: a matte cream joinery material when the page has one.'),
+    'vanity': dict(
+        drawn=False, wall=True, solid=True,
+        params=dict(wood=('int_wood_walnut', None, None), stool=('int_fabric_sofa', None, None), h=(0.76, 0.70, 0.80),
+                    light=(1, 0, 1)),
+        footprint='w = across (local Y, 0.90-1.30, the top\'s length), d = along (local X, 0.65-0.85: the top 0.42 '
+                  'off the wall + the stool tucked half under it); back on the wall at -X.',
+        notes='Floating walnut top at 0.76 with a drawer box, tray, bottle and vase; a round mirror (r 0.22-0.32) on '
+              'the wall with an int_lamp_shade halo; a round greige stool on four black legs. Bedroom, near the '
+              'window, on a free wall not behind the bed; needs ~0.7 m clear in front.'),
     'dresser': dict(
         drawn=False, wall=True, solid=True,
         params=dict(h=(0.80, 0.70, 0.95), wood=('int_wood_walnut', None, None), decor=(1, 0, 1), mirror=(1, 0, 1)),
@@ -1579,9 +1726,10 @@ KINDS = {
         notes='Under the bed: centre it on the bed\'s footprint shifted ~0.4 m to the foot, w = bed w + 0.8, d = 1.6-2.0.'),
     'fridge_tower': dict(
         drawn=False, wall=True, solid=True,
-        params=dict(h=(2.20, 2.0, 2.4), hand=(1, -1, 1), front=('int_white_gloss', None, None)),
+        params=dict(h=(2.20, 2.0, 2.4), hand=(1, -1, 1), front=('int_black', None, None), body=('int_wood_walnut', None, None)),
         footprint='w = across (0.60), d = along (= the run\'s depth); fronts at +X like kitchen_run, top at 2.20 = wall cabinets.',
-        notes='Stand it at either end of a run, same heading. hand=+1 puts the pulls at +Y.'),
+        notes='Black glass doors in a walnut carcass (render 4), recessed dark pulls, a small lit display. '
+              'Stand it at either end of a run, same heading. hand=+1 puts the pulls at +Y.'),
     'oven_tower': dict(
         drawn=False, wall=True, solid=True,
         params=dict(h=(2.20, 2.0, 2.4), front=('int_white_gloss', None, None)),
@@ -1592,7 +1740,7 @@ KINDS = {
 DEFAULT_SIZE = {
     'bed_double': (1.80, 2.00), 'nightstand': (0.50, 0.40), 'kitchen_run': (2.50, 0.70), 'sink': (0.50, 0.42),
     'hob': (0.58, 0.50), 'desk': (1.40, 0.70), 'office_chair': (0.60, 0.60), 'desk_equipment': (0.47, 0.35),
-    'wardrobe': (1.80, 0.60), 'dresser': (1.20, 0.45), 'rug_bedroom': (2.00, 1.40), 'fridge_tower': (0.60, 0.70),
+    'wardrobe': (1.80, 0.60), 'vanity': (1.10, 0.75), 'dresser': (1.20, 0.45), 'rug_bedroom': (2.00, 1.40), 'fridge_tower': (0.60, 0.70),
     'oven_tower': (0.60, 0.70),
 }
 SIZE_RANGE = {
@@ -1600,6 +1748,7 @@ SIZE_RANGE = {
     'kitchen_run': ((0.80, 0.60), (3.55, 0.70)), 'sink': ((0.50, 0.42), (0.50, 0.42)), 'hob': ((0.58, 0.50), (0.58, 0.50)),
     'desk': ((1.00, 0.55), (1.80, 0.80)), 'office_chair': ((0.45, 0.45), (0.70, 0.70)),
     'desk_equipment': ((0.15, 0.10), (0.70, 0.40)), 'wardrobe': ((0.80, 0.55), (3.00, 0.65)),
+    'vanity': ((0.90, 0.65), (1.30, 0.85)),
     'dresser': ((0.70, 0.40), (1.60, 0.50)), 'rug_bedroom': ((1.40, 1.00), (3.00, 2.40)),
     'fridge_tower': ((0.60, 0.60), (0.60, 0.70)), 'oven_tower': ((0.60, 0.60), (0.60, 0.70)),
 }
@@ -1607,7 +1756,7 @@ SIZE_RANGE = {
 _BUILDERS = {
     'bed_double': b_bed, 'nightstand': b_nightstand, 'kitchen_run': b_kitchen_run, 'sink': b_sink, 'hob': b_hob,
     'desk': b_desk, 'office_chair': b_office_chair, 'desk_equipment': b_desk_equipment, 'wardrobe': b_wardrobe,
-    'dresser': b_dresser, 'rug_bedroom': b_rug,
+    'vanity': b_vanity, 'dresser': b_dresser, 'rug_bedroom': b_rug,
     'fridge_tower': lambda K, w, d, rng, **p: b_tower(K, w, d, rng, kind='fridge', **p),
     'oven_tower': lambda K, w, d, rng, **p: b_tower(K, w, d, rng, kind='oven', **p),
 }
@@ -1641,14 +1790,15 @@ def tri_count(kind, w, d, **p):
 # =====================================================================
 PREVIEW_COL = {
     'int_white_gloss': ('#e6e5e1', 0.22, 0.0), 'int_ceramic': ('#ecece9', 0.10, 0.0), 'chrome': ('#cdd0d4', 0.14, 1.0),
-    'int_mirror': ('#e0e4e9', 0.03, 1.0), 'int_black': ('#111214', 0.40, 0.2), 'int_brass': ('#b08c55', 0.35, 0.85),
+    'int_mirror': ('#e0e4e9', 0.03, 1.0), 'int_black': ('#111214', 0.40, 0.2), 'int_brass': ('#a8806a', 0.35, 0.85),
     'int_wood_oak': ('#b3895a', 0.55, 0.0), 'int_wood_walnut': ('#4f3627', 0.48, 0.0), 'int_wood_teak': ('#8a5a32', 0.45, 0.0),
-    'int_fabric_sofa': ('#7b7f86', 0.95, 0.0), 'int_fabric_white': ('#eeeae2', 0.85, 0.0), 'int_fabric_teal': ('#3c8a84', 0.92, 0.0),
-    'int_fabric_bluegrey': ('#8294a8', 0.92, 0.0), 'int_fabric_dark': ('#3d4148', 0.95, 0.0), 'int_fabric_orange': ('#d6622a', 0.9, 0.0),
+    'int_fabric_sofa': ('#cfc5b8', 0.95, 0.0), 'int_fabric_white': ('#eeeae2', 0.85, 0.0), 'int_fabric_teal': ('#3c8a84', 0.92, 0.0),
+    'int_fabric_bluegrey': ('#8294a8', 0.92, 0.0), 'int_fabric_dark': ('#3d4148', 0.95, 0.0), 'int_fabric_orange': ('#94604e', 0.9, 0.0),
     'int_rug': ('#9a9ea5', 0.95, 0.0), 'int_lamp_shade': ('#f1e8d6', 0.7, 0.0), 'int_mint': ('#a7c3b2', 0.30, 0.0),
-    'int_marble': ('#e8e5e0', 0.12, 0.0), 'int_stone_dark': ('#3a3a3c', 0.32, 0.0), 'int_accent_red': ('#8b2d29', 0.6, 0.0),
-    'int_pot': ('#36322f', 0.6, 0.0), 'metal_dark': ('#43444a', 0.34, 0.9), 'frame_light': ('#d9d6ce', 0.48, 0.3),
+    'int_marble': ('#e6e2da', 0.12, 0.0), 'int_stone_dark': ('#3a3a3c', 0.32, 0.0), 'int_accent_red': ('#8b2d29', 0.6, 0.0),
+    'int_pot': ('#36322f', 0.6, 0.0), 'metal_dark': ('#2a2b2e', 0.34, 0.9), 'frame_light': ('#d9d6ce', 0.48, 0.3),
     'bark': ('#4a3a2c', 0.9, 0.0), 'foliage': ('#4b6128', 0.6, 0.0), 'int_glass': ('#cfe2ea', 0.05, 0.0),
+    'int_tile_white': ('#c9b9a0', 0.3, 0.0), 'int_tile_floor': ('#b8ab9f', 0.35, 0.0),
 }
 
 if __name__ == '__main__':
@@ -1815,9 +1965,9 @@ if __name__ == '__main__':
         'kitchen3': [('kitchen_run', 2.5, 0.7, dict(upper=True, profile=[[-1.23, -1.07, 0.7], [-1.07, -1.05, 0.52], [-1.05, 0.35, 0.35],
                                                                          [0.35, 0.37, 0.63], [0.37, 1.25, 0.7]], hob_y=0.8), (0, 0), 0),
                      ('hob', 0.58, 0.5, dict(wall=0.38, upper=True), (0.03, 0.8), 0)],
-        'bedroom': [('rug_bedroom', 2.6, 1.8, {}, (0.35, 0), 0), ('bed_double', 1.8, 2.0, dict(duvet='int_fabric_teal'), (0, 0), 0),
-                    ('nightstand', 0.5, 0.4, dict(lamp_side=0), (-0.8, 1.2), 0), ('nightstand', 0.5, 0.4, dict(lamp_side=0), (-0.8, -1.2), 0),
-                    ('wardrobe', 1.8, 0.6, {}, (1.2, 2.1), -90), ('dresser', 1.2, 0.45, {}, (1.6, -2.1), 90)],
+        'bedroom': [('bed_double', 1.6, 2.0, dict(duvet='int_fabric_teal'), (0, 0), 0),
+                    ('nightstand', 0.5, 0.4, dict(lamp_side=0), (-0.8, 1.1), 0), ('nightstand', 0.4, 0.4, {}, (-0.8, -1.1), 0),
+                    ('wardrobe', 1.8, 0.6, {}, (1.2, 2.1), -90), ('vanity', 1.1, 0.75, {}, (1.6, -2.025), 90)],
         'office': [('desk', 1.5, 1.5, dict(outline=[(-1.06, -0.0), (0.0, -1.06), (0.43, -0.63), (-0.21, -0.0), (0.42, 0.64), (-0.0, 1.06)]), (0, 0), 0),
                    ('office_chair', 0.6, 0.6, {}, (0.35, 0.0), 180), ('desk_equipment', 0.47, 0.35, {}, (-0.43, 0.0), 0)],
     }

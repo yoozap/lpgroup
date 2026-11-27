@@ -30,15 +30,16 @@ projected in world space, so nothing here needs UVs.
 Triangles per kind at the default size and default params (tri_count()):
 
     kind               tris   footprint w x d (m)   drawn
-    wc                 1388   0.45 x 0.65            yes  (wall-hung on a pre-wall; style=1 close-coupled: 1624)
-    basin              1950   0.60 x 0.45            yes  (vanity + bowl + mixer + mirror + light + shelf + plant;
-                                                           mirror=0 shelf=0 plant=0: 1040)
-    shower_corner      1920   0.80 x 0.80            yes  (tray + curved sliding screen + column + corner shelf;
-                                                           shape=1 square: 1676 at 0.90)
-    shower             1758   1.95 x 0.90            yes  (walk-in: tray, linear drain, glass, column, teak stool)
-    bath               1896   1.90 x 0.75            yes  (tub, apron, wall mixer, hand shower, teak caddy)
-    bath_corner        1520   1.30 x 1.30            yes  (corner tub, apron, deck spout + knobs)
-    towel_rail          780   0.50 x 0.12            no   (heated ladder rail + draped towel)
+    wc                 1388   0.45 x 0.65            yes  (wall-hung on a tiled pre-wall; style=1 close-coupled)
+    basin               900   0.60 x 0.45            yes  (white 2-drawer vanity, marble top, vessel bowl, tall
+                                                           black mixer, mirror on a glowing panel)
+    shower_corner      1206   0.80 x 0.80            yes  (flush tile tray, square black drain, frameless glass
+                                                           with black profiles, both walls tiled, black column)
+    shower             1120   1.95 x 0.90            yes  (walk-in: flush tray, black linear drain, glass panel,
+                                                           back wall tiled, black column)
+    bath               1908   1.90 x 0.75            yes  (tub, apron, wall mixer, hand shower, teak caddy, wall tiled)
+    bath_corner        1544   1.30 x 1.30            yes  (corner tub, apron, deck spout + knobs, walls tiled)
+    towel_rail          780   0.50 x 0.12            no   (black ladder rail + draped towel)
     washing_machine    1134   0.60 x 0.60            no
     wc_set              588   0.30 x 0.16            no   (roll holder on the wall + brush on the floor)
     bath_mat            112   0.80 x 0.50            no
@@ -46,9 +47,9 @@ Triangles per kind at the default size and default params (tri_count()):
     laundry_basket      776   0.40 x 0.40            no
     bath_plant          450   0.35 x 0.35            no   (snake plant; species=1 leafy bush: 734)
 
-The composite kinds (basin, the showers, bath) are several products in one
-mesh; each product on its own stays inside ~1000 (the shower column ~950, the
-tub ~650, the vanity + bowl ~600).
+Fittings are FIT (metal_dark), wet walls TILE (int_tile_white, the page's
+world-projected tile grid): both names already exist in web/materials.js,
+as do int_tile_floor (the flush trays) and int_lamp_shade (the mirror glow).
 
 (regenerate with `python3 blender/furn_kit_bath.py --table`)
 """
@@ -56,6 +57,14 @@ import math
 import random
 
 TAU = 2.0 * math.pi
+
+# The owner's renders (4, 7, 11, 12): matt black fittings, frameless glass
+# with black profiles, beige large-format tile, a white vanity with a marble
+# top. FIT is every tap, column, drain, rail and flush plate; TILE the wet
+# walls the kit clads (the page's int_tile_white: a world-projected grid,
+# re-tinted beige / large format in web/materials.js).
+FIT = 'metal_dark'
+TILE = 'int_tile_white'
 
 # ---------------------------------------------------------------- kinds
 KINDS = {
@@ -71,34 +80,35 @@ KINDS = {
               'the footprint and stand on the wall line x = -d/2.'),
     'basin': dict(
         drawn=True,
-        params={'mirror': (1, 0, 1), 'shelf': (1, 0, 1), 'plant': (1, 0, 1), 'front': (0, 0, 2)},
+        params={'mirror': (1, 0, 1), 'shelf': (0, 0, 1), 'plant': (0, 0, 1), 'front': (2, 0, 2)},
         footprint='w = across (the vanity width, local Y, drawn 0.45-0.80), d = along the facing (vanity '
                   'depth, local X, drawn 0.33-0.55); the wall is x = -d/2.',
         wall=True, solid=True,
-        notes='Wall-hung vanity 0.42..0.80, ceramic top with an integrated bowl, rim at 0.85, single-lever '
-              'mixer. On the wall above (x = -d/2 .. -d/2 + 0.13): an oak ledge at 1.10, a mirror 1.12..1.80 '
-              'as wide as the vanity (max 0.80) and a light bar at 1.84 - all inside the footprint in plan. '
-              'front: 0 oak drawer front, 1 walnut, 2 white. plant=1 puts a small pot on the back deck.'),
+        notes='Wall-hung white vanity 0.44..0.84 with two drawers, a 22 mm marble top at 0.86, a round white '
+              'vessel bowl on it, a tall black mixer behind. On the wall: a rectangular mirror 1.10..1.85 as wide '
+              'as the vanity (max 0.80) on a warm glowing panel (int_lamp_shade) 12 mm wider all round. '
+              'front: 0 oak drawers, 1 walnut, 2 white (default). shelf / plant are accepted and ignored.'),
     'shower_corner': dict(
         drawn=True,
-        params={'shape': (0, 0, 1)},
+        params={'shape': (1, 0, 1)},
         footprint='lib_furnish {sx, sy}: call with d = sx (local X), w = sy (local Y). The two walls are '
                   'x = -d/2 and y = -w/2 (corner at (-d/2, -w/2)); the screen bulges toward (+X, +Y). '
                   'Drawn 0.70-1.60 each.',
         wall=True, solid=True,
-        notes='shape 0: offset-quadrant tray (R <= 0.55) with two curved sliding doors; shape 1: square tray, '
-              'corner entry. Shower column (thermostat bar 1.10, rain head 2.0) on the wall x = -d/2; corner '
-              'shelf at 1.30. Needs both walls: it is placed by lib_furnish onto the drawn corner.'),
+        notes='Floor-flush square tray in int_tile_floor with a square black drain; frameless glass on the two '
+              'open sides (black top profiles, a black corner post, a black bar handle); both walls clad in '
+              'int_tile_white to 2.10; black column (bar 1.10, 0.25 square rain head 2.05) on x = -d/2. shape is '
+              'kept for old callers and ignored (no curved screen). Needs both walls (the drawn corner).'),
     'shower': dict(
         drawn=True,
-        params={'tray': (0, 0, 1), 'stool': (1, 0, 1)},
+        params={'tray': (0, 0, 1), 'stool': (0, 0, 1)},
         footprint='w = across (along the back wall, drawn 0.70-2.20), d = along the facing (out of the back '
                   'wall, drawn 0.70-1.40); the back wall is x = -d/2.',
         wall=True, solid=False,
-        notes='Walk-in: low tray (tray 0 dark stone, 1 white), linear drain by the back wall, one fixed glass '
-              'panel on the front edge from y = -w/2 (length 0.55 w, 0.8..1.2) with a stabiliser rod to the '
-              'back wall at 1.98, shower column on the back wall behind the glass, teak stool in the open end '
-              '(stool=1, only when the open end is >= 0.7). Walkable: only the glass panel line blocks.'),
+        notes='Walk-in: flush tray (tray 0 the floor tile, 1 white), black linear drain by the back wall, one '
+              'frameless glass panel on the front edge from y = -w/2 (length 0.55 w, 0.8..1.2) with black '
+              'profiles and a black stabiliser rod at 2.0, black column on the back wall, the back wall clad in '
+              'tile to 2.10. stool is ignored (no teak stool). Walkable: only the glass panel line blocks.'),
     'bath': dict(
         drawn=True,
         params={'caddy': (1, 0, 1), 'tap_end': (0, 0, 1)},
@@ -122,8 +132,8 @@ KINDS = {
                   'stand-off + towel); the wall is x = -d/2.',
         wall=True, solid=False,
         notes='Heated ladder rail 0.20 .. 0.20+h on four wall brackets with valves; one towel draped over a '
-              'bar. finish: 0 chrome, 1 white, 2 black. towel: -1 by seed, 0 white, 1 teal, 2 blue-grey, '
-              '3 orange. Any free wall, also beside the shower or above the bath end.'),
+              'bar. finish: 0 and 1 dark metal (metal_dark), 2 matt black. towel: -1 by seed, 0 white, 1 greige, 2 white, '
+              '3 terracotta. Any free wall, also beside the shower or above the bath end.'),
     'washing_machine': dict(
         drawn=False,
         params={},
@@ -143,7 +153,7 @@ KINDS = {
         footprint='w = across (0.5-1.0), d = along (0.4-0.7): lay it in front of the bath / shower / basin '
                   'with its +X away from the fixture.',
         wall=False, solid=False,
-        notes='14 mm pile mat. color: -1 by seed, 0 white, 1 teal, 2 blue-grey, 3 dark.'),
+        notes='14 mm pile mat. color: -1 by seed, 0 white, 1 greige, 2 white, 3 dark.'),
     'wall_cabinet': dict(
         drawn=False,
         params={'z0': (1.35, 1.1, 1.6), 'h': (0.60, 0.4, 0.8)},
@@ -162,7 +172,7 @@ KINDS = {
         params={'species': (0, 0, 1), 'pot': (0, 0, 1)},
         footprint='w x d = the plant box (0.25-0.50); the pot diameter is ~0.6 min(w, d).',
         wall=False, solid=False,
-        notes='species 0: snake plant (0.75 high at 0.35); 1: leafy bush. pot 0 white glaze, 1 dark. '
+        notes='species 0: snake plant (0.75 high at 0.35); 1: leafy bush. pot 0 dark int_pot, 1 int_stone_dark. '
               'Corners of the room, beside the bath or the basin.'),
 }
 
@@ -654,7 +664,7 @@ def leaf(k, mat, base, direction, face, length, width, nseg=4, droop=0.0, fold=0
 # ---------------------------------------------------------------- shared fittings
 def mixer_basin(k, x, y, z, h=0.16, reach=0.12):
     """Single-lever basin mixer standing at (x, y, z), spout along +X."""
-    C = 'chrome'
+    C = FIT
     lathe(k, C, [(0.0262, 0.0), (0.025, 0.006), (0.0185, 0.016), (0.0185, h - 0.008), (0.0125, h),
                  (0.0, h + 0.001)], seg=12, o=(x, y, z), smooth=[True, True, True, True, False])
     zs = z + h - 0.035
@@ -678,7 +688,7 @@ def shower_column(k, xw, y, head='round', z_bar=1.10, z_top=2.0, arm=0.30, hand_
     """Thermostatic shower column on the wall x = xw (into +X), centred on y:
     a thermostat bar with two knobs, the riser, an arm, the rain head, a
     hand shower in its slider and the hose looping between."""
-    C = 'chrome'
+    C = FIT
     xb = xw + 0.065                              # bar axis
     # wall unions
     for dy in (-0.075, 0.075):
@@ -711,7 +721,7 @@ def shower_column(k, xw, y, head='round', z_bar=1.10, z_top=2.0, arm=0.30, hand_
         lathe(k, 'int_black', [(R - 0.004, 0.0), (R - 0.016, -0.0015), (0.0, -0.0015)], seg=20, o=(hx, y, zh),
               smooth=[True, False])
     else:
-        S = 0.15
+        S = 0.125
         slab(k, C, lambda i: rrect(hx - S + i, hx + S - i, y - S + i, y + S - i, max(1e-3, 0.03 - i), 2), zh,
              zh + 0.012, 0.004, 1, sup=0.0)
         slab(k, 'int_black', lambda i: rrect(hx - S + 0.015 + i, hx + S - 0.015 - i, y - S + 0.015 + i,
@@ -857,7 +867,7 @@ def b_wc(k, w, d, rng, style=0):
         boxr(k, 'int_marble', (x0, -w / 2, H - 0.02), (xw + 0.012, w / 2, H), rb=0.004, bseg=1)
         # flush plate: a chrome frame, two white buttons
         with at(k, m_wall(xw, 0.0, 0.99)):
-            slab(k, 'chrome', lambda i: rrect(-0.122 + i, 0.122 - i, -0.082 + i, 0.082 - i, max(1e-3, 0.012 - i), 2),
+            slab(k, FIT, lambda i: rrect(-0.122 + i, 0.122 - i, -0.082 + i, 0.082 - i, max(1e-3, 0.012 - i), 2),
                  -0.001, 0.007, 0.003, 1, sup=0.0)
             slab(k, 'int_white_gloss', lambda i: rrect(-0.105 + i, -0.004 - i, -0.066 + i, 0.066 - i, 0.008, 2),
                  0.007, 0.010, 0.0, side_smooth=False, cap0=False)
@@ -881,7 +891,7 @@ def b_wc(k, w, d, rng, style=0):
         slab(k, 'int_ceramic', lambda i: rrect(x0 + i, xc + 0.006 - i, -cw - 0.005 + i, cw + 0.005 - i,
                                                max(1e-3, 0.033 - i), 3), 0.80, 0.826, 0.008, 2, sup=0.0,
              bot_bevel=False)
-        lathe(k, 'chrome', [(0.0, 0.0), (0.024, 0.0), (0.024, 0.004), (0.021, 0.007), (0.0, 0.007)], seg=16,
+        lathe(k, FIT, [(0.0, 0.0), (0.024, 0.0), (0.024, 0.004), (0.021, 0.007), (0.0, 0.007)], seg=16,
               o=((x0 + xc) / 2, 0.0, 0.826))
         boxr(k, 'int_black', ((x0 + xc) / 2 - 0.0008, -0.017, 0.8331), ((x0 + xc) / 2 + 0.0008, 0.017, 0.8336))
         xw = x0 + 0.03
@@ -909,292 +919,163 @@ def b_wc(k, w, d, rng, style=0):
     slab(k, 'int_white_gloss', lid, zr + 0.0195, zr + 0.04, 0.009, 2, sup=0.0, dome=0.007, bot_bevel=False)
     # hinges
     for s in (-1, 1):
-        lathe(k, 'chrome', [(0.0, -0.016), (0.011, -0.014), (0.011, 0.014), (0.0, 0.016)], seg=8,
+        lathe(k, FIT, [(0.0, -0.016), (0.011, -0.014), (0.011, 0.014), (0.0, 0.016)], seg=8,
               o=(seat_back + 0.012, s * 0.075, zr + 0.022), axis=(0, 1, 0))
 
 
-def b_basin(k, w, d, rng, mirror=1, shelf=1, plant=1, front=0):
+def clad(k, x0, ya, yb, z0=0.0, z1=2.10, back=0.03, t=0.003):
+    """Wet-wall tile on the wall plane x = x0, from ya to yb: a slab t proud
+    of the wall that runs `back` into it (the drawn box rarely sits exactly
+    on the wall; a slit would show from above). Its top is the tile's edge.
+    10 tris."""
+    boxr(k, TILE, (x0 - back, ya, z0), (x0 + t, yb, z1), cap0=False)
+
+
+def clad_y(k, y0, xa, xb, z0=0.0, z1=2.10, back=0.03, t=0.003):
+    """The same on a wall plane y = y0 (the room is on +Y)."""
+    boxr(k, TILE, (xa, y0 - back, z0), (xb, y0 + t, z1), cap0=False)
+
+
+def b_basin(k, w, d, rng, mirror=1, shelf=0, plant=0, front=2):
+    """The renders' vanity (7, 11, 12): a white wall-hung unit with two
+    drawers, a marble top, a white vessel bowl, a tall black mixer, a
+    rectangular mirror with a warm glow round its edge. shelf / plant are
+    accepted for the old callers and ignored."""
     x0, x1 = -d / 2, d / 2
-    TOP, zb = 0.85, 0.805
     hw = w / 2
-    # opening of the bowl
-    ox0, ox1 = x0 + 0.105, x1 - 0.045
-    oy = hw - 0.055
-    ro = min(0.085, 0.45 * (ox1 - ox0), 0.45 * oy * 2)
-    seg = 3
-    sup = 0.0
-    D = min(0.125, 0.25 + (ox1 - ox0) * 0.3 - 0.2)
-    zbot = TOP - D
-    A = 0.62 * min((ox1 - ox0) / 2, oy)
-
-    def out_r(i, z):
-        return ring3(rrect(x0 + i, x1 - i, -hw + i, hw - i, max(1e-3, 0.014 - i), seg, sup), z)
-
-    def bowl_r(i, z, extra_r=0.0):
-        return ring3(rrect(ox0 + i, ox1 - i, -oy + i, oy - i, max(0.01, ro - 0.6 * i + extra_r), seg, sup), z)
-    rb = 0.007
-    rings, sm = [], []
-
-    def add(r, s=None):
-        rings.append(r)
-        if s is not None:
-            sm.append(s)
-    add(bowl_r(-0.012, zb))
-    add(out_r(rb, zb), False)                       # underside (flat)
-    add(out_r(0.0, zb + rb), True)
-    add(out_r(0.0, TOP - rb - 0.002), True)
-    add(out_r(0.0, TOP - rb), True)
-    add(out_r(rb * (1 - math.cos(math.pi / 4)), TOP - rb + rb * math.sin(math.pi / 4)), True)
-    add(out_r(rb, TOP), True)
-    add(bowl_r(-0.009, TOP), False)                 # the top deck (flat)
-    add(bowl_r(-0.004, TOP - 0.0015), True)        # lip
-    add(bowl_r(0.0, TOP - 0.006), True)
-    n = 5
-    for s in range(1, n + 1):
-        th = (math.pi / 2) * s / n
-        add(bowl_r(0.004 + A * (1 - math.cos(th)), TOP - 0.006 - (D - 0.006) * math.sin(th)), True)
-    cx = (ox0 + ox1) / 2
-    add([(cx, 0.0, zbot)], True)
-    loft(k, 'int_ceramic', rings, sm)
-    # drain
-    lathe(k, 'chrome', [(0.031, 0.0), (0.029, 0.003), (0.0, 0.0035)], seg=14, o=(cx, 0.0, zbot),
-          smooth=[True, False])
-    # the vanity: a white carcass (open top, under the ceramic), a drawer front
-    # with a finger gap under the top
+    TOP = 0.86
+    T = 0.022
+    zb0 = 0.44
+    xf = x1 - 0.022
+    W = 'int_white_gloss'
     fm = ('int_wood_oak', 'int_wood_walnut', 'int_white_gloss')[int(front) % 3]
-    xf = x1 - 0.026
-    slab(k, 'int_white_gloss', lambda i: rrect(x0 + i, xf - i, -hw + 0.004 + i, hw - 0.004 - i, 0.004, 1),
-         0.42, zb, 0.004, 1, sup=0.0, side_smooth=False, bev_smooth=False, cap1=False, top_bevel=False)
-    boxr(k, fm, (xf, -hw + 0.004, 0.42), (x1 - 0.004, hw - 0.004, zb - 0.032), rb=0.003, bseg=1)
-    # brass pull in the gap
-    boxr(k, 'int_brass', (x1 - 0.012, -min(0.18, hw * 0.55), zb - 0.032), (x1 - 0.004, min(0.18, hw * 0.55), zb - 0.028))
-    # mixer on the back deck
-    mixer_basin(k, x0 + 0.055, 0.0, TOP, 0.16, min(0.125, ox0 - x0 - 0.055 + 0.075))
-    # soap pump on the deck, a small plant on the other side
-    if hw > 0.26:
-        bottle(k, x0 + 0.05, hw - 0.06, TOP, 0.026, 0.15, 'int_white_gloss', 'chrome', pump=True)
-        if plant:
-            plant_bush(k, rng, x0 + 0.052, -(hw - 0.07), TOP, s=0.30, r_pot=0.042, n=9, h_pot=0.075, wall=True)
-    mw = min(w, 0.80)
-    if shelf:
-        boxr(k, 'int_wood_oak', (x0, -mw / 2 + 0.04, 1.085), (x0 + 0.11, mw / 2 - 0.04, 1.105), rb=0.004, bseg=1)
-        # a tumbler with two toothbrushes, a bottle
-        ty = -mw / 2 + 0.14
-        lathe(k, 'int_ceramic', [(0.0, 0.0), (0.031, 0.0), (0.036, 0.095), (0.032, 0.095),
-                                 (0.028, 0.012), (0.0, 0.012)], seg=12, o=(x0 + 0.06, ty, 1.105),
-              smooth=[False, True, False, True, False])
-        for j, (m_, dy) in enumerate((('int_mint', -0.008), ('int_white_gloss', 0.01))):
-            p0 = (x0 + 0.06 + 0.004 * j, ty + dy * 0.5, 1.118)
-            p1 = (x0 + 0.06 - 0.006 + 0.012 * j, ty + dy * 2.6, 1.30)
-            tube(k, m_, [p0, p1], 0.0045, seg=6)
-            boxr(k, 'int_fabric_white', v_add(p1, (-0.006, -0.005, -0.03)), v_add(p1, (0.006, 0.005, 0.0)))
-        bottle(k, x0 + 0.055, mw / 2 - 0.12, 1.105, 0.022, 0.12, 'int_mint', 'chrome')
+    # carcass (its front is the drawers), marble top
+    boxr(k, W, (x0, -hw + 0.004, zb0), (xf, hw - 0.004, TOP - T), cap1=False)
+    zm = (zb0 + TOP - T) / 2
+    boxr(k, fm, (xf, -hw + 0.006, zb0 + 0.002), (x1 - 0.002, hw - 0.006, zm - 0.0015), rb=0.003, bseg=1)
+    boxr(k, fm, (xf, -hw + 0.006, zm + 0.0015), (x1 - 0.002, hw - 0.006, TOP - T - 0.022), rb=0.003, bseg=1)
+    boxr(k, 'int_black', (xf - 0.001, -hw + 0.01, TOP - T - 0.021), (xf + 0.0005, hw - 0.01, TOP - T),
+         cap0=False, cap1=False)
+    boxr(k, 'int_marble', (x0, -hw, TOP - T), (x1, hw, TOP), rb=0.003, bseg=1)
+    # the vessel bowl: round, thin-walled, a black waste
+    R = max(0.13, min(0.19, hw - 0.05, (d - 0.10) / 2 - 0.01))
+    cx = x1 - R - 0.025
+    H = 0.13
+    lathe(k, 'int_ceramic', [(0.0, 0.0), (R * 0.55, 0.0), (R * 0.86, 0.035), (R * 0.98, 0.085), (R, H - 0.006),
+                             (R - 0.004, H), (R - 0.009, H - 0.006), (R * 0.82, 0.05), (R * 0.45, 0.018),
+                             (0.0, 0.012)], seg=20, o=(cx, 0.0, TOP),
+          smooth=[False, True, True, True, True, True, True, True, True])
+    lathe(k, FIT, [(0.022, 0.0125), (0.0, 0.0135)], seg=10, o=(cx, 0.0, TOP), smooth=False)
+    # the mixer on the deck behind the bowl, reaching over its middle
+    mx = x0 + 0.045
+    mixer_basin(k, mx, 0.0, TOP, 0.27, max(0.10, cx - mx - 0.01))
     if mirror:
-        zm0, zm1 = 1.12, 1.80
+        mw = min(w, 0.80)
+        zm0, zm1 = 1.10, 1.85
+        hh = (zm1 - zm0) / 2
         with at(k, m_wall(x0, 0.0, (zm0 + zm1) / 2)):
-            slab(k, 'int_black', lambda i: rrect(-mw / 2 + 0.025 + i, mw / 2 - 0.025 - i, -(zm1 - zm0) / 2 + 0.025 + i,
-                                                 (zm1 - zm0) / 2 - 0.025 - i, 0.01, 2), 0.0, 0.016, 0.0, cap0=False)
-            slab(k, 'int_mirror', lambda i: rrect(-mw / 2 + i, mw / 2 - i, -(zm1 - zm0) / 2 + i, (zm1 - zm0) / 2 - i,
-                                                  0.03, 4), 0.016, 0.022, 0.0, cap0=False)
-        # light bar over the mirror: chrome housing, a glowing diffuser under it
-        lw = mw * 0.42
-        boxr(k, 'chrome', (x0, -0.02, 1.84), (x0 + 0.008, 0.02, 1.885))
-        boxr(k, 'chrome', (x0 + 0.008, -0.008, 1.866), (x0 + 0.072, 0.008, 1.876))
-        boxr(k, 'chrome', (x0 + 0.07, -lw, 1.858), (x0 + 0.115, lw, 1.884), rb=0.005, bseg=1)
-        boxr(k, 'int_lamp_shade', (x0 + 0.074, -lw + 0.006, 1.8545), (x0 + 0.111, lw - 0.006, 1.8585))
+            # the glow: a warm panel 12 mm round the mirror, behind it
+            slab(k, 'int_lamp_shade', lambda i: rrect(-mw / 2 - 0.012 + i, mw / 2 + 0.012 - i, -hh - 0.012 + i,
+                                                      hh + 0.012 - i, 0.04, 3), 0.002, 0.016, 0.0, cap0=False)
+            slab(k, 'int_mirror', lambda i: rrect(-mw / 2 + i, mw / 2 - i, -hh + i, hh - i, 0.03, 3),
+                 0.016, 0.022, 0.0, cap0=False)
 
 
-def quadrant_keys(cx0, cy0, d, w, i, R, na=10, rc=0.004, square=False):
-    """Plan of a corner tray / screen line at inset i: walls on x = cx0 and
-    y = cy0, the front an offset quadrant of radius R (CCW from above)."""
-    keys = [(cx0 + i, cy0 + i, rc, 0), (cx0 + d - i, cy0 + i, 0.004, 0)]
-    if square:
-        keys.append((cx0 + d - i, cy0 + w - i, 0.03, 4))
-    else:
-        cxa, cya = cx0 + d - R, cy0 + w - R
-        rr = R - i
-        for s in range(na + 1):
-            a = (math.pi / 2) * s / na
-            keys.append((cxa + rr * math.cos(a), cya + rr * math.sin(a), 0.0, 0))
-    keys.append((cx0 + i, cy0 + w - i, 0.004, 0))
-    return keys
+def glass_pane(k, a, b, z0, z1, top=True):
+    """Frameless glass from plan point a to b (one sheet, the page's
+    double-sided int_glass) with a slim black profile along the top and a
+    black wall channel at a. ~40 tris."""
+    strip(k, 'int_glass', [a, b], z0, z1)
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L = math.hypot(dx, dy) or 1e-9
+    ux, uy = dx / L, dy / L
+    nx, ny = -uy * 0.009, ux * 0.009
+
+    def bar(p, q, za, zb):
+        pts = [(p[0] - nx, p[1] - ny), (q[0] - nx, q[1] - ny), (q[0] + nx, q[1] + ny), (p[0] + nx, p[1] + ny)]
+        if _area2(pts) < 0:
+            pts = pts[::-1]
+        slab(k, 'int_black', lambda i: pts, za, zb, 0.0, side_smooth=False)
+    if top:
+        bar(a, b, z1 - 0.004, z1 + 0.014)
+    bar(a, (a[0] + ux * 0.018, a[1] + uy * 0.018), z0, z1)
 
 
-def path_len(p):
-    return sum(math.hypot(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]) for i in range(len(p) - 1))
+def _area2(pts):
+    return sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1]
+               for i in range(len(pts)))
 
 
-def path_sub(p, s0, s1, off=0.0):
-    """Part of a plan polyline between arc lengths s0..s1, offset `off` to
-    the left of travel."""
-    out = []
-    acc = 0.0
-    for i in range(len(p) - 1):
-        a, b = p[i], p[i + 1]
-        L = math.hypot(b[0] - a[0], b[1] - a[1])
-        if L < 1e-9:
-            continue
-        nx, ny = -(b[1] - a[1]) / L, (b[0] - a[0]) / L
-        for s in ([s0] if acc <= s0 < acc + L else []) + ([acc] if s0 < acc < s1 else []):
-            t = (s - acc) / L
-            out.append((a[0] + (b[0] - a[0]) * t + nx * off, a[1] + (b[1] - a[1]) * t + ny * off))
-        if acc < s1 <= acc + L + 1e-9:
-            t = (s1 - acc) / L
-            out.append((a[0] + (b[0] - a[0]) * t + nx * off, a[1] + (b[1] - a[1]) * t + ny * off))
-            break
-        acc += L
-    return out
+def tray_flush(k, x0, x1, y0, y1, mat):
+    """A walk-in floor: the bathroom's own floor tile 12 mm up, a square
+    black drain in it."""
+    slab(k, mat, lambda i: rrect(x0 + i, x1 - i, y0 + i, y1 - i, max(1e-3, 0.006 - i), 1), 0.0, 0.012, 0.003, 1,
+         sup=0.0, side_smooth=False, bev_smooth=False, bot_bevel=False, cap0=False)
 
 
-def offset_path(p, off):
-    """Plan polyline offset to the left of travel (mitred)."""
-    out = []
-    n = len(p)
-    for i in range(n):
-        if i == 0:
-            t = (p[1][0] - p[0][0], p[1][1] - p[0][1])
-        elif i == n - 1:
-            t = (p[-1][0] - p[-2][0], p[-1][1] - p[-2][1])
-        else:
-            t1 = (p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1])
-            t2 = (p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1])
-            l1, l2 = math.hypot(*t1) or 1e-9, math.hypot(*t2) or 1e-9
-            t = (t1[0] / l1 + t2[0] / l2, t1[1] / l1 + t2[1] / l2)
-        L = math.hypot(*t) or 1e-9
-        nx, ny = -t[1] / L, t[0] / L
-        sc = 1.0
-        if 0 < i < n - 1:
-            l1 = math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]) or 1e-9
-            e1 = (-(p[i][1] - p[i - 1][1]) / l1, (p[i][0] - p[i - 1][0]) / l1)
-            sc = 1.0 / max(0.5, nx * e1[0] + ny * e1[1])
-        out.append((p[i][0] + nx * off * sc, p[i][1] + ny * off * sc))
-    return out
-
-
-def corner_shelf(k, cx0, cy0, z, r=0.2):
-    keys = [(cx0 + 0.002, cy0 + 0.002, 0.0, 0)]
-    for s in range(7):
-        a = (math.pi / 2) * s / 6
-        keys.append((cx0 + r * math.cos(a), cy0 + r * math.sin(a), 0.0, 0))
-    pts = rpoly(keys)
-    slab(k, 'int_white_gloss', lambda i: [(p[0] - i * 0.0, p[1] - i * 0.0) for p in pts], z - 0.018, z, 0.0,
-         side_smooth=False)
-    bottle(k, cx0 + 0.075, cy0 + 0.075, z, 0.024, 0.18, 'int_white_gloss', 'int_black')
-
-
-def glass_screen(k, path, panels, z0, z1):
-    """Glass on the plan polyline: `panels` [(s0, s1, off)] by arc length."""
-    for s0, s1, off in panels:
-        sub = path_sub(offset_path(path, off), s0, s1)
-        strip(k, 'int_glass', sub, z0, z1)
-
-
-def b_shower_corner(k, w, d, rng, shape=0):
+def b_shower_corner(k, w, d, rng, shape=1):
+    """Corner shower as the renders draw it (4, 7, 11, 12): a square,
+    floor-flush tray in the floor's tile with a square black drain, two
+    frameless glass panes on the open sides with black top profiles and a
+    black bar handle on the door, both walls tiled to 2.10, a black
+    thermostatic column with a square rain head. `shape` is kept for the
+    old callers; the curved quadrant screen is gone."""
     cx0, cy0 = -d / 2, -w / 2
-    sq = int(shape) == 1
-    R = clamp(min(0.55, min(w, d) - 0.12), 0.25, 0.9)
-    # the tray: 4 cm, a soft top edge
-    slab(k, 'int_ceramic', lambda i: rpoly(quadrant_keys(cx0, cy0, d, w, i, R, 12, square=sq)), 0.0, 0.04, 0.006, 2,
-         sup=0.0, side_smooth=False)
-    # drain
-    lathe(k, 'chrome', [(0.047, 0.0), (0.045, 0.0035), (0.03, 0.0035)], seg=14,
-          o=(cx0 + min(d, w) * 0.36, cy0 + min(d, w) * 0.36, 0.04), smooth=[True, False])
-    lathe(k, 'int_black', [(0.03, 0.0035), (0.0, 0.0025)], seg=14,
-          o=(cx0 + min(d, w) * 0.36, cy0 + min(d, w) * 0.36, 0.04), smooth=False)
-    # the screen line: from the wall y = cy0 round to the wall x = cx0
-    g = 0.04
-    line = [(x, y) for x, y in rpoly(quadrant_keys(cx0, cy0, d, w, g, R, 14, square=sq))]
-    # drop the two points on the walls' side of the plan: keep x-end .. y-end
-    line = line[1:]
-    line[0] = (line[0][0], cy0)
-    line[-1] = (cx0, line[-1][1])
-    L = path_len(line)
-    zg0, zg1 = 0.05, 1.95
-    if sq:
-        # corner entry: fixed panels by the walls, two doors meeting round the corner
-        L1 = w - g                                  # the first leg: wall y = cy0 .. the corner
-        panels = [(0.0, L1 - 0.30, 0.0), (L1 - 0.34, L1 - 0.02, 0.022), (L1 + 0.02, L1 + 0.34, 0.022),
-                  (L1 + 0.30, L, 0.0)]
-        meet = [L1 - 0.03, L1 + 0.03]
-    else:
-        panels = [(0.0, 0.31 * L, 0.0), (0.26 * L, 0.502 * L, 0.022), (0.498 * L, 0.74 * L, 0.022),
-                  (0.69 * L, L, 0.0)]
-        meet = [0.49 * L, 0.51 * L]
-    glass_screen(k, line, panels, zg0, zg1)
-    C = 'chrome'
-    # top rail over the outer line, a low profile at the foot
-    top = [(x, y, zg1 + 0.012) for x, y in offset_path(line, 0.011)]
-    tube(k, C, top, 0.010, seg=6)
-    # wall channels
-    boxr(k, C, (line[0][0] - 0.016, cy0, 0.04), (line[0][0] + 0.016, cy0 + 0.028, zg1 + 0.03), rb=0.003)
-    boxr(k, C, (cx0, line[-1][1] - 0.016, 0.04), (cx0 + 0.028, line[-1][1] + 0.016, zg1 + 0.03), rb=0.003)
-    # door edges and handles: on the inner (door) line, a vertical bar handle
-    # outside each door near where they meet
-    for j, s in enumerate(meet):
-        pin = path_sub(offset_path(line, 0.022), max(0.0, s - 0.001), s)
-        if not pin:
-            continue
-        px, py = pin[-1]
-        tube(k, C, [(px, py, zg0), (px, py, zg1)], 0.006, seg=6)
-        sh = s + (-0.07 if j == 0 else 0.07)
-        po = path_sub(offset_path(line, -0.022), max(0.0, sh - 0.001), sh)
-        pi_ = path_sub(offset_path(line, 0.022), max(0.0, sh - 0.001), sh)
-        if not po or not pi_:
-            continue
-        ox, oy = po[-1]
-        ix, iy = pi_[-1]
-        ux, uy = ox - ix, oy - iy
-        hf = 0.95 if sq else 1.3
-        hx, hy = ix + ux * hf, iy + uy * hf
-        tube(k, C, [(hx, hy, 0.93), (hx, hy, 1.25)], 0.0085, seg=8)
-        for zz in (0.97, 1.21):
-            tube(k, C, [(ix, iy, zz), (hx, hy, zz)], 0.0055, seg=6, cap1=False)
-    # column on the wall x = cx0
+    cx1, cy1 = d / 2, w / 2
+    tray_flush(k, cx0, cx1, cy0, cy1, 'int_tile_floor')
+    dc = (cx0 + d * 0.5, cy0 + w * 0.5)
+    boxr(k, 'int_black', (dc[0] - 0.06, dc[1] - 0.06, 0.012), (dc[0] + 0.06, dc[1] + 0.06, 0.0135), cap0=False)
+    for j in range(4):
+        yy = dc[1] - 0.045 + j * 0.03
+        boxr(k, FIT, (dc[0] - 0.045, yy, 0.0135), (dc[0] + 0.045, yy + 0.006, 0.0142), cap0=False)
+    # wet walls
+    clad(k, cx0, cy0, cy1)
+    clad_y(k, cy0, cx0 + 0.003, cx1)
+    # the glass: along the front (x = cx1 - g) from the side wall to the
+    # corner, then along the open side (y = cy1 - g) back to the wall
+    g = 0.03
+    zg0, zg1 = 0.012, 2.0
+    xa, ya = cx1 - g, cy1 - g
+    glass_pane(k, (xa, cy0 + 0.003), (xa, ya), zg0, zg1)
+    glass_pane(k, (cx0 + 0.003, ya), (xa, ya), zg0, zg1)
+    # the corner post and the door's bar handle (the door is the front pane's
+    # outer half: a pull 0.07 from its free edge, outside)
+    boxr(k, 'int_black', (xa - 0.009, ya - 0.009, zg0), (xa + 0.009, ya + 0.009, zg1 + 0.014))
+    hy = ya - 0.09
+    tube(k, 'int_black', [(xa + 0.045, hy, 0.85), (xa + 0.045, hy, 1.25)], 0.009, seg=8)
+    for zz in (0.89, 1.21):
+        tube(k, 'int_black', [(xa, hy, zz), (xa + 0.045, hy, zz)], 0.006, seg=6, cap1=False)
+    # column on the back wall
     yr = cy0 + clamp(0.5 * (w - g), 0.33, 0.55)
-    shower_column(k, cx0, yr, 'round', 1.10, 2.0, min(0.30, d - 0.30))
-    corner_shelf(k, cx0, cy0, 1.32, min(0.2, 0.3 * min(w, d)))
+    shower_column(k, cx0 + 0.003, yr, 'square', 1.10, 2.05, min(0.30, d - 0.30))
 
 
-def b_shower(k, w, d, rng, tray=0, stool=1):
+def b_shower(k, w, d, rng, tray=0, stool=0):
+    """Walk-in shower: a flush tray (tray 0 the floor's tile, 1 white
+    ceramic), a black linear drain, one frameless glass panel on the front
+    edge from y = -w/2 with black profiles and a black stabiliser rod, the
+    back wall tiled to 2.10, a black column with a square head. stool is
+    kept for the old callers (the teak stool is gone)."""
     x0, x1 = -d / 2, d / 2
-    tm = ('int_stone_dark', 'int_ceramic')[int(tray) % 2]
-    slab(k, tm, lambda i: rrect(x0 + i, x1 - i, -w / 2 + i, w / 2 - i, max(1e-3, 0.012 - i), 2), 0.0, 0.03,
-         0.005, 2, sup=0.0, side_smooth=False)
+    tm = ('int_tile_floor', 'int_ceramic')[int(tray) % 2]
+    tray_flush(k, x0, x1, -w / 2, w / 2, tm)
+    clad(k, x0, -w / 2, w / 2)
     # linear drain by the back wall
     dl = min(0.40, w / 2 - 0.12)
-    boxr(k, 'chrome', (x0 + 0.045, -dl, 0.0295), (x0 + 0.095, dl, 0.033), rb=0.002)
+    boxr(k, 'int_black', (x0 + 0.045, -dl, 0.012), (x0 + 0.095, dl, 0.0135), cap0=False)
     for j in range(5):
         xx = x0 + 0.053 + j * 0.008
-        boxr(k, 'int_black', (xx, -dl + 0.01, 0.033), (xx + 0.003, dl - 0.01, 0.0333), cap0=False)
+        boxr(k, FIT, (xx, -dl + 0.01, 0.0135), (xx + 0.003, dl - 0.01, 0.0140), cap0=False)
     # the glass: one fixed panel on the front edge from y = -w/2
     Lg = min(clamp(0.55 * w, 0.8, 1.2), max(0.3, w - 0.6))     # leave at least 0.6 m to walk in
     xg = x1 - 0.035
     ya, yb = -w / 2, -w / 2 + Lg
-    strip(k, 'int_glass', [(xg, ya + 0.02), (xg, yb)], 0.045, 2.0)
-    C = 'chrome'
-    boxr(k, C, (xg - 0.012, ya, 0.028), (xg + 0.012, yb, 0.058), rb=0.003)
-    boxr(k, C, (xg - 0.012, ya, 0.028), (xg + 0.012, ya + 0.022, 2.01), rb=0.003)
-    tube(k, C, [(xg, yb, 0.06), (xg, yb, 1.99)], 0.004, seg=6)          # polished free edge
+    glass_pane(k, (xg, ya + 0.003), (xg, yb), 0.012, 2.0)
     ys = yb - 0.12
-    tube(k, C, [(xg, ys, 1.975), (x0 + 0.004, ys, 1.975)], 0.0095, seg=10)
-    rosette(k, C, x0, ys, 1.975, 0.022, 0.008)
-    for s in (-1, 1):
-        boxr(k, C, (xg + s * 0.004 - 0.008 * (s < 0), ys - 0.02, 1.955), (xg + s * 0.004 + 0.008 * (s > 0), ys + 0.02, 1.995))
+    tube(k, 'int_black', [(xg, ys, 2.0), (x0 + 0.004, ys, 2.0)], 0.007, seg=8)
     # column on the back wall, behind the glass
     yc = clamp(ya + Lg * 0.5, -w / 2 + 0.19, w / 2 - 0.19)
-    shower_column(k, x0, yc, 'square', 1.10, 2.05, min(0.36, d - 0.45))
-    # teak stool in the open end
-    if stool and (w / 2 - yb) >= 0.70:
-        sy = w / 2 - 0.30
-        sx = x0 + 0.24
-        T = 'int_wood_teak'
-        for j in range(4):
-            xx = sx - 0.14 + j * 0.0725
-            boxr(k, T, (xx, sy - 0.2, 0.42), (xx + 0.062, sy + 0.2, 0.445), rb=0.004, bseg=1)
-        for s in (-1, 1):
-            yy = sy + s * 0.16
-            boxr(k, T, (sx - 0.13, yy - 0.012, 0.03), (sx + 0.13, yy + 0.012, 0.42))
-        boxr(k, T, (sx - 0.012, sy - 0.148, 0.16), (sx + 0.012, sy + 0.148, 0.19))
+    shower_column(k, x0 + 0.003, yc, 'square', 1.10, 2.05, min(0.36, d - 0.45))
 
 
 def tub_profile(top, depth, rf, n_wall=2, n_fil=3):
@@ -1275,11 +1156,11 @@ def b_bath(k, w, d, rng, caddy=1, tap_end=0):
     # drain near the foot, on the floor
     fl = rings[-2]
     fy = min(p[1] for p in fl) if sgn < 0 else max(p[1] for p in fl)
-    lathe(k, 'chrome', [(0.035, 0.0), (0.033, 0.0035), (0.0, 0.004)], seg=14, o=(c[0], fy - sgn * 0.06, zf),
+    lathe(k, FIT, [(0.035, 0.0), (0.033, 0.0035), (0.0, 0.004)], seg=14, o=(c[0], fy - sgn * 0.06, zf),
           smooth=[True, False])
     # wall mixer at the foot end: bar along Y, two knobs, spout, telephone
     # hand shower in its cradle, the hose looping down
-    C = 'chrome'
+    C = FIT
     ym = sgn * (w / 2 - 0.30)
     zm = 0.78
     xb = x0 + 0.07
@@ -1323,6 +1204,8 @@ def b_bath(k, w, d, rng, caddy=1, tap_end=0):
         tube(k, 'int_black', [(0.06, yc + 0.03, TOP + 0.085), (0.06, yc + 0.03, TOP + 0.097)], 0.0012, seg=4)
         boxr(k, 'int_fabric_white', (-0.12, yc - 0.06, TOP + 0.016), (0.0, yc + 0.06, TOP + 0.05), rb=0.01,
              bseg=1, smooth=True)
+    # the long wall tiled from the rim up (the apron hides the rest)
+    clad(k, x0, -w / 2, w / 2, z0=TOP - 0.03)
 
 
 def corner_bath_keys(cx0, cy0, d, w, i, e, rc, rf, na=12, n=2.25):
@@ -1376,11 +1259,11 @@ def b_bath_corner(k, w, d, rng):
     c = centroid2([(p[0], p[1]) for p in last])
     add([(c[0], c[1], zf)], False)
     loft(k, 'int_ceramic', rings, sm)
-    lathe(k, 'chrome', [(0.035, 0.0), (0.033, 0.0035), (0.0, 0.004)], seg=14, o=(c[0], c[1], zf),
+    lathe(k, FIT, [(0.035, 0.0), (0.033, 0.0035), (0.0, 0.004)], seg=14, o=(c[0], c[1], zf),
           smooth=[True, False])
     # deck mixer in the corner: a spout arching toward the middle of the tub,
     # two knobs beside it
-    C = 'chrome'
+    C = FIT
     ux, uy = math.sqrt(0.5), math.sqrt(0.5)
     px, py = cx0 + 0.105, cy0 + 0.105
     lathe(k, C, [(0.026, 0.0), (0.026, 0.004), (0.02, 0.01), (0.0, 0.012)], seg=12, o=(px, py, TOP),
@@ -1394,11 +1277,14 @@ def b_bath_corner(k, w, d, rng):
         lathe(k, C, [(0.024, 0.0), (0.019, 0.008), (0.019, 0.045), (0.015, 0.052), (0.0, 0.053)], seg=10,
               o=(kx, ky, TOP), smooth=[True, True, True, False])
         boxr(k, C, (kx - 0.004, ky - 0.004, TOP + 0.05), (kx + 0.004, ky + 0.004, TOP + 0.056), cap0=False)
+    # both walls tiled from the rim up
+    clad(k, cx0, cy0, cy0 + w, z0=TOP - 0.02)
+    clad_y(k, cy0, cx0 + 0.003, cx0 + d, z0=TOP - 0.02)
 
 
 def b_towel_rail(k, w, d, rng, h=0.95, finish=0, towel=-1):
     x0 = -d / 2
-    M = ('chrome', 'int_white_gloss', 'int_black')[int(finish) % 3]
+    M = (FIT, FIT, 'int_black')[int(finish) % 3]
     xb = x0 + 0.055
     z0, z1 = 0.20, 0.20 + h
     yv = w / 2 - 0.016
@@ -1410,9 +1296,9 @@ def b_towel_rail(k, w, d, rng, h=0.95, finish=0, towel=-1):
             rosette(k, M, x0, s * yv, zz, 0.02, 0.007, seg=10)
             tube(k, M, [(x0 + 0.006, s * yv, zz), (xb - 0.01, s * yv, zz)], 0.0075, seg=6, cap0=False, cap1=False)
         # valve tails into the wall
-        tube(k, 'chrome', [(xb, s * yv, z0 - 0.01), (xb, s * yv, z0 - 0.06), (xb - 0.012, s * yv, z0 - 0.075),
+        tube(k, FIT, [(xb, s * yv, z0 - 0.01), (xb, s * yv, z0 - 0.06), (xb - 0.012, s * yv, z0 - 0.075),
                            (x0 + 0.004, s * yv, z0 - 0.078)], 0.0075, seg=6, cap0=False, cap1=False)
-        rosette(k, 'chrome', x0, s * yv, z0 - 0.078, 0.019, 0.006, seg=10)
+        rosette(k, FIT, x0, s * yv, z0 - 0.078, 0.019, 0.006, seg=10)
     # bars: groups of four with a gap
     bars = []
     z = z1 - 0.035
@@ -1423,7 +1309,7 @@ def b_towel_rail(k, w, d, rng, h=0.95, finish=0, towel=-1):
         z -= 4 * 0.048 + 0.075
     for zz in bars:
         tube(k, M, [(xb, -yv, zz), (xb, yv, zz)], 0.0105, seg=8, cap0=False, cap1=False)
-    tm = fabric_for(rng, towel, ('int_fabric_white', 'int_fabric_teal', 'int_fabric_bluegrey', 'int_fabric_orange'))
+    tm = fabric_for(rng, towel, ('int_fabric_white', 'int_fabric_sofa', 'int_fabric_white', 'int_fabric_orange'))
     if len(bars) >= 2:
         zt = bars[1] if len(bars) > 4 else bars[0]
         tw = min(0.44, 2 * yv - 0.05)
@@ -1444,7 +1330,7 @@ def b_washing_machine(k, w, d, rng):
     cz = 0.43
     with at(k, (((0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0)), (x1, 0.0, cz))):
         # local z -> world +X (out of the front), local x -> world -Z, local y -> world Y
-        lathe(k, 'frame_light', [(0.236, -0.004), (0.238, 0.012), (0.23, 0.032), (0.205, 0.041)],
+        lathe(k, 'chrome', [(0.236, -0.004), (0.238, 0.012), (0.23, 0.032), (0.205, 0.041)],
               seg=32, smooth=True)
         lathe(k, 'chrome', [(0.205, 0.041), (0.199, 0.046), (0.193, 0.044)], seg=32, smooth=True)
         lathe(k, 'int_black', [(0.193, 0.044), (0.15, 0.053), (0.0, 0.06)], seg=32)
@@ -1474,7 +1360,7 @@ def b_washing_machine(k, w, d, rng):
 
 def b_wc_set(k, w, d, rng):
     x0 = -d / 2
-    C = 'chrome'
+    C = FIT
     yh = w / 2 - 0.035
     z = 0.70
     rosette(k, C, x0, yh, z, 0.026, 0.009, seg=16)
@@ -1499,7 +1385,7 @@ def b_wc_set(k, w, d, rng):
 
 
 def b_bath_mat(k, w, d, rng, color=-1):
-    m = fabric_for(rng, color, ('int_fabric_white', 'int_fabric_teal', 'int_fabric_bluegrey', 'int_fabric_dark'))
+    m = fabric_for(rng, color, ('int_fabric_white', 'int_fabric_sofa', 'int_fabric_white', 'int_fabric_dark'))
     slab(k, m, lambda i: rrect(-d / 2 + i, d / 2 - i, -w / 2 + i, w / 2 - i, max(0.005, 0.05 - i), 3), 0.0,
          0.014, 0.006, 2, sup=0.0, cap0=False, bot_bevel=False)
 
@@ -1533,7 +1419,7 @@ def b_wall_cabinet(k, w, d, rng, z0=1.35, h=0.60):
     # in the niche: rolled towels, a bottle
     zz = z0 + 0.022
     ry = -w / 2 + t + 0.05
-    cols = ('int_fabric_white', 'int_fabric_white', 'int_fabric_teal')
+    cols = ('int_fabric_white', 'int_fabric_white', 'int_fabric_sofa')
     for j in range(3 if w >= 0.5 else 2):
         r = 0.042
         y = ry + j * 0.09
@@ -1542,14 +1428,14 @@ def b_wall_cabinet(k, w, d, rng, z0=1.35, h=0.60):
         lathe(k, cols[j], [(0.0, 0.0), (r - 0.01, 0.0), (r, 0.008), (r, d - 0.06), (r - 0.01, d - 0.05),
                            (0.0, d - 0.05)], seg=10, o=(x0 + 0.02, y, zz + r), axis=(1, 0, 0),
               smooth=[False, True, True, True, False])
-    bottle(k, (x0 + xf) / 2, w / 2 - t - 0.06, zz, 0.024, 0.15, 'int_mint', 'chrome', pump=True)
+    bottle(k, (x0 + xf) / 2, w / 2 - t - 0.06, zz, 0.024, 0.15, 'int_white_gloss', FIT, pump=True)
 
 
 def b_laundry_basket(k, w, d, rng):
     r = min(w, d) / 2 - 0.016
     rb = r * 0.86
     H = 0.55
-    F = 'int_fabric_bluegrey'
+    F = 'int_fabric_sofa'
     lathe(k, F, [(0.0, 0.0), (rb - 0.01, 0.0), (rb, 0.008), (r - 0.012, H - 0.05)], seg=20, smooth=[False, True, True])
     lathe(k, 'int_fabric_white', [(r - 0.012, H - 0.05), (r + 0.006, H - 0.045), (r + 0.014, H - 0.025),
                                   (r + 0.01, H - 0.004), (r - 0.004, H), (r - 0.016, H - 0.012),
@@ -1561,9 +1447,9 @@ def b_laundry_basket(k, w, d, rng):
         pts = [(-0.045, y, H - 0.085), (-0.03, y + s * 0.016, H - 0.11), (0.0, y + s * 0.022, H - 0.118),
                (0.03, y + s * 0.016, H - 0.11), (0.045, y, H - 0.085)]
         tube(k, 'int_accent_red', catmull(pts, 6), 0.007, seg=5)
-    # towels heaped in it: two crumpled lumps, white and teal
+    # towels heaped in it: two crumpled lumps, white and terracotta
     for (cx, cy, rad, top, m_, ph) in ((-0.03, 0.025, r * 0.62, H + 0.055, 'int_fabric_white', 0.0),
-                                       (0.05, -0.05, r * 0.5, H + 0.035, 'int_fabric_teal', 1.7)):
+                                       (0.05, -0.05, r * 0.5, H + 0.035, 'int_fabric_orange', 1.7)):
         rings = []
         seg = 14
         for i, (fr, z) in enumerate([(1.0, H - 0.09), (1.08, H - 0.03), (0.95, top - 0.035), (0.62, top - 0.008),
@@ -1582,7 +1468,7 @@ def b_laundry_basket(k, w, d, rng):
 
 
 def b_plant(k, w, d, rng, species=0, pot=0):
-    pm = ('int_ceramic', 'int_pot')[int(pot) % 2]
+    pm = ('int_pot', 'int_stone_dark')[int(pot) % 2]
     m = min(w, d)
     if int(species) == 0:
         rp = clamp(0.34 * m, 0.07, 0.17)

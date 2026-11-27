@@ -877,7 +877,10 @@ export function buildMaterials( THREE, opts ) {
 			 * between repeats and the grid stops reading. */
 			const drift = mx_fractal_noise_float(
 				vec3( uv.x.mul( 0.11 ), uv.y.mul( 0.11 ), 3.7 ), 3, 2.0, 0.5, 1.0 );
-			m.colorNode = texture( maps.parquetDiff, q ).rgb
+			/* The owner's renders (Nov 2026) lay a pale, greyed light oak: the
+			 * scan's mean (#93704d) is pulled to ~#a68a73, the blue lifted
+			 * most, so the floor loses its orange and keeps its grain. */
+			m.colorNode = texture( maps.parquetDiff, q ).rgb.mul( vec3( 1.30, 1.55, 2.25 ) )
 				.mul( clamp( float( 1.0 ).add( drift.mul( 0.13 ) ), 0.82, 1.18 ) );
 			// the scan is a showroom lacquer (0.03-0.20); lifted a little, or
 			// the whole flat mirrors in the floor
@@ -962,7 +965,8 @@ export function buildMaterials( THREE, opts ) {
 		const n2 = mx_fractal_noise_float( p.mul( 2.3 ).add( 7.0 ), 3, 2.0, 0.5, 1.0 );
 		const vein = pow( oneMinus( abs( sin( n1.mul( 6.0 ).add( n2.mul( 2.0 ) ) ) ) ), 8.0 );
 		const vein2 = pow( oneMinus( abs( sin( n2.mul( 9.0 ).add( 1.7 ) ) ) ), 14.0 );
-		m.colorNode = mix( vec3( ...SR( '#ebe8e3' ) ), vec3( ...SR( '#6f7075' ) ),
+		// white-grey marble with warm grey-brown veins (the owner's renders)
+		m.colorNode = mix( vec3( ...SR( '#e8e4dc' ) ), vec3( ...SR( '#7f6e60' ) ),
 			saturate( vein.mul( 0.75 ).add( vein2.mul( 0.45 ) ) ) );
 		m.roughnessNode = float( 0.12 );
 		m.metalnessNode = float( 0.0 );
@@ -1016,9 +1020,11 @@ export function buildMaterials( THREE, opts ) {
 	}
 	M.int_fabric_teal = cloth( 'int_fabric_teal', '#3c8a84' );
 	M.int_fabric_bluegrey = cloth( 'int_fabric_bluegrey', '#8294a8' );
-	M.int_fabric_white = cloth( 'int_fabric_white', '#eeeae2', 0.85, 0.4 );
-	M.int_fabric_orange = cloth( 'int_fabric_orange', '#d6622a' );
-	M.int_fabric_sofa = cloth( 'int_fabric_sofa', '#7b7f86', 0.95, 0.35 );
+	// boucle white (sofas, pouf, linen), terracotta / rust (throws), and a warm
+	// greige (headboards, dining chairs, cushions) - the owner's renders
+	M.int_fabric_white = cloth( 'int_fabric_white', '#ece7df', 0.92, 0.6 );
+	M.int_fabric_orange = cloth( 'int_fabric_orange', '#9a5a42' );
+	M.int_fabric_sofa = cloth( 'int_fabric_sofa', '#b9ab9b', 0.95, 0.4 );
 	M.int_fabric_dark = cloth( 'int_fabric_dark', '#3d4148', 0.95, 0.3 );
 	/* Curtains and the built-in joinery are the two surfaces you stand
 	 * closest to in the flat, so both carry a scanned map rather than noise.
@@ -1040,12 +1046,15 @@ export function buildMaterials( THREE, opts ) {
 		const n = grain( 30.0, 3 );
 		if ( maps.leatherDiff ) {
 			const d = texture( maps.leatherDiff, q ).rgb;
-			// the scan is a warm off-white; cooled a little toward the render's grey
-			m.colorNode = d.mul( vec3( 0.92, 0.95, 1.0 ) ).mul( 0.96 );
-			m.opacityNode = clamp( float( 0.86 ).add( lum( d ).sub( 0.78 ).mul( 0.4 ) ), 0.78, 0.97 );
+			/* Warm white sheers (the owner's renders): only the scan's weave
+			 * is kept - its luminance about its mean (0.285) - over a warm
+			 * white, and the cloth lets the window through. */
+			const wv = lum( d ).div( 0.285 );
+			m.colorNode = vec3( ...SR( '#ebe7df' ) ).mul( clamp( wv.mul( 0.35 ).add( 0.65 ), 0.8, 1.12 ) );
+			m.opacityNode = clamp( float( 0.70 ).add( wv.sub( 1.0 ).mul( 0.25 ) ), 0.6, 0.8 );
 		} else {
-			m.colorNode = vec3( ...SR( '#ccd2da' ) ).mul( float( 1.0 ).add( n.mul( 0.14 ) ) );
-			m.opacityNode = float( 0.90 );
+			m.colorNode = vec3( ...SR( '#ebe7df' ) ).mul( float( 1.0 ).add( n.mul( 0.14 ) ) );
+			m.opacityNode = float( 0.70 );
 		}
 		m.transparent = true;
 		m.roughnessNode = maps.leatherRough
@@ -1059,7 +1068,7 @@ export function buildMaterials( THREE, opts ) {
 		m.metalnessNode = float( 0.0 );
 		m.sheenNode = float( 0.9 );
 		m.sheenRoughnessNode = float( 0.55 );
-		m.sheenColorNode = vec3( 1.0, 0.99, 0.96 );
+		m.sheenColorNode = vec3( 1.0, 0.98, 0.94 );
 		return m;
 	} )();
 
@@ -1100,9 +1109,9 @@ export function buildMaterials( THREE, opts ) {
 		return m;
 	}
 	M.int_tile_wall = scanTile( 'int_tile_wall',
-		{ d: maps.btileDiff, r: maps.btileRough, n: maps.btileNor }, 0.62, [ 1.0, 1.0, 1.0 ], 0.06 );
+		{ d: maps.btileDiff, r: maps.btileRough, n: maps.btileNor }, 0.62, [ 0.80, 0.62, 0.48 ], 0.06 );
 	M.int_tile_floor = scanTile( 'int_tile_floor',
-		{ d: maps.bfloorDiff, r: maps.bfloorRough, n: maps.bfloorNor }, 0.80, [ 0.95, 0.96, 0.98 ], 0.08 );
+		{ d: maps.bfloorDiff, r: maps.bfloorRough, n: maps.bfloorNor }, 0.80, [ 1.55, 1.58, 1.60 ], 0.08 );
 
 	/* The dining chairs. They are downloaded models and do carry UVs, so this
 	 * one is mapped off the model's own coordinates. The sheet behind it is a
@@ -1200,7 +1209,7 @@ export function buildMaterials( THREE, opts ) {
 		const m = new THREE.MeshPhysicalNodeMaterial();
 		m.name = 'int_coffee_top';
 		const n = grain( 14.0, 3 );
-		m.colorNode = vec3( ...SR( '#2b3139' ) ).mul( float( 1.0 ).add( n.mul( 0.06 ) ) );
+		m.colorNode = vec3( ...SR( '#27304a' ) ).mul( float( 1.0 ).add( n.mul( 0.06 ) ) );
 		m.roughnessNode = float( 0.22 );
 		m.metalnessNode = float( 0.0 );
 		m.clearcoatNode = float( 0.7 );
@@ -1219,7 +1228,9 @@ export function buildMaterials( THREE, opts ) {
 		const q = select( nz.greaterThan( 0.6 ), vec2( u, v ),
 			select( nx.greaterThan( ny ), vec2( v, hh ), vec2( u, hh ) ) ).div( TILE );
 		if ( maps.planksDiff ) {
-			m.colorNode = texture( maps.planksDiff, q ).rgb.mul( 1.02 );
+			// warm white paint (the owner's renders): the scan's boards as luminance only
+			m.colorNode = vec3( ...SR( '#e4ddd2' ) ).mul(
+				clamp( lum( texture( maps.planksDiff, q ).rgb ).div( 0.404 ).mul( 0.45 ).add( 0.55 ), 0.75, 1.1 ) );
 			m.roughnessNode = maps.planksRough
 				? clamp( texture( maps.planksRough, q ).r.mul( 0.75 ).add( 0.18 ), 0.16, 0.92 )
 				: float( 0.38 );
@@ -1293,8 +1304,14 @@ export function buildMaterials( THREE, opts ) {
 		m.clearcoatRoughnessNode = float( 0.08 );
 		return m;
 	}
+	/* Warm taupe walls, as the owner's renders have them. The same material
+	 * is every ceiling too (lib_plan MAT_CEIL), so a face turned up or down
+	 * keeps a warm off-white: one shader, no new name. */
 	M.int_wall = ( () => {
-		const m = simple( 'int_wall', '#d9d5cc', 0.92, 0.0, 0.04 );
+		const m = simple( 'int_wall', '#b5a292', 0.92, 0.0, 0.04 );
+		const n = grain( 12.0, 2 );
+		m.colorNode = select( abs( normalWorld.y ).greaterThan( 0.6 ),
+			vec3( ...SR( '#ebe7e0' ) ), vec3( ...SR( '#b5a292' ) ) ).mul( float( 1.0 ).add( n.mul( 0.04 ) ) );
 		m.normalNode = bumpMap( grain( 25.0, 2 ), float( 0.04 ) );
 		return m;
 	} )();
@@ -1317,18 +1334,22 @@ export function buildMaterials( THREE, opts ) {
 		return m;
 	} )();
 	M.int_wood_walnut = ( () => {
-		const m = simple( 'int_wood_walnut', '#4f3627', 0.48, 0.0, 0.0 );
+		const m = simple( 'int_wood_walnut', '#45291a', 0.45, 0.0, 0.0 );
 		const g = mx_fractal_noise_float( positionWorld.mul( vec3( 3.0, 40.0, 3.0 ) ), 3, 2.0, 0.5, 1.0 );
-		m.colorNode = vec3( ...SR( '#4f3627' ) ).mul( float( 1.0 ).add( g.mul( 0.22 ) ) );
+		m.colorNode = vec3( ...SR( '#45291a' ) ).mul( float( 1.0 ).add( g.mul( 0.24 ) ) );
 		return m;
 	} )();
 	M.int_black = simple( 'int_black', '#111214', 0.40, 0.2, 0.0 );
 	M.int_stone_dark = simple( 'int_stone_dark', '#3a3a3c', 0.32, 0.0, 0.08 );
 	M.int_accent_red = simple( 'int_accent_red', '#8b2d29', 0.60, 0.0, 0.06 );
 	M.int_pot = simple( 'int_pot', '#36322f', 0.60, 0.0, 0.08 );
-	// the mint worktop and splashback of the render's kitchen
-	M.int_mint = gloss( 'int_mint', '#a7c3b2', 0.30, 0.6 );
-	M.int_brass = metalMat( 'int_brass', '#b08c55', 0.35, 0.85 );
+	/* Was the mint worktop of the first reference render. Since the owner's
+	 * renders (Nov 2026) the name carries the matt greige of the handleless
+	 * kitchen fronts, the island, the hall wardrobe doors and the TV wall
+	 * panel - a name the kits already used, so no new shader. */
+	M.int_mint = simple( 'int_mint', '#b4a38f', 0.55, 0.0, 0.03 );
+	// bronze / rose-gold pulls (the renders' wardrobes), was a yellow brass
+	M.int_brass = metalMat( 'int_brass', '#a8806a', 0.35, 0.85 );
 	M.int_mirror = metalMat( 'int_mirror', '#e0e4e9', 0.03, 1.0 );
 	M.int_glass = ( () => {
 		const m = new THREE.MeshPhysicalNodeMaterial();

@@ -81,7 +81,12 @@ MAIN_MAT = {
     'decor_candles': 'int_brass', 'decor_table_plant': 'foliage', 'plant_herbs': 'foliage',
     'plant_succulents': 'foliage', 'plant_pothos': 'foliage',
 }
-for _k in ('plant_monstera', 'plant_fiddle', 'plant_rubber', 'plant_snake', 'plant_palm', 'plant_olive'):
+MAIN_MAT.update({
+    'loveseat': 'int_fabric_white', 'pouf': 'int_fabric_white', 'table_dining': 'int_wood_walnut',
+    'chair': 'int_fabric_sofa', 'tall_walnut': 'int_wood_walnut', 'kitchen_island': 'int_mint',
+    'hall_wardrobe': 'int_mint', 'ac_unit': 'int_black', 'vanity': 'int_wood_walnut',
+})
+for _k in ('plant_monstera', 'plant_strelitzia', 'plant_fiddle', 'plant_rubber', 'plant_snake', 'plant_palm', 'plant_olive'):
     MAIN_MAT[_k] = 'foliage'
 
 BIG_PLANTS = ('plant_monstera', 'plant_fiddle', 'plant_palm', 'plant_olive', 'plant_rubber')
@@ -310,6 +315,7 @@ class Unit:
         self.pieces = pieces
         self.ceiling = ceiling
         self.added = []
+        self.removed = set()        # nodes of drawn pieces the dressing replaced (the round table set)
         self.count = {}
         for p in pieces:
             self.count[p['kind']] = max(self.count.get(p['kind'], 0), p['k'])
@@ -416,7 +422,42 @@ class Unit:
         return self.rooms.get(rid)
 
     def pieces_in(self, rid, kind=None):
-        return [p for p in self.pieces + self.added if p['room'] == rid and (kind is None or p['kind'] == kind)]
+        return [p for p in self.pieces + self.added if p['room'] == rid and (kind is None or p['kind'] == kind)
+                and p['node'] not in self.removed]
+
+    def forget(self, pcs):
+        """Take pieces out: their obstacles go, the room's walking field is
+        rebuilt on the next reach test. A drawn piece is left out of the
+        output; an added one is dropped from `added`."""
+        ids = set(id(p) for p in pcs)
+        self.obs = [ob for ob in self.obs if ob.piece is None or id(ob.piece) not in ids]
+        for p in pcs:
+            self.removed.add(p['node'])
+        self.added = [p for p in self.added if id(p) not in ids]
+        self.stale()
+
+    def restore(self, pcs):
+        for p in pcs:
+            self.removed.discard(p['node'])
+            self.obs.append(self.piece_ob(p))
+        self.stale()
+
+    def stale(self):
+        for room in self.rooms.values():
+            for a in ('_block', '_raw', '_reach', '_seeds', '_allseed', '_spot_ok'):
+                if hasattr(room, a):
+                    delattr(room, a)
+
+    def reshape(self, p, poly, z1=None):
+        """A placed piece grew or moved: its obstacle follows."""
+        for ob in self.obs:
+            if ob.piece is p:
+                ob.poly = poly
+                if z1 is not None:
+                    ob.z1 = z1
+                if p.get('box'):
+                    ob.solid = ob.z1 > SOLID_Z[0] and ob.z0 < SOLID_Z[1]
+        self.stale()
 
     # -- the tests
     def clear(self, polys, z0, z1, ignore=(), rug=False, skip_tags=()):
@@ -489,7 +530,15 @@ class Unit:
             room._reach = room.reach(room._block, allseed)
             sp = room.spot(room._raw)
             room._spot_ok = bool(room._reach[sp])
-        mine = room.paint(poly)
+        if poly and isinstance(poly[0][0], (tuple, list)):
+            # a set of footprints tested as one (a table and its chairs)
+            mine = np.zeros(room.floor.shape, bool)
+            for q in poly:
+                mine |= room.paint(q)
+            raw_q = poly
+        else:
+            mine = room.paint(poly)
+            raw_q = [poly]
         block = room._block | mine
         r1 = room.reach(block, room._allseed)
         for S in room._seeds:
@@ -506,7 +555,10 @@ class Unit:
             return False
         # the walker's own target in the room must stay where a body gets to
         if room._spot_ok:
-            sp = room.spot(room._raw | room.paint(poly, R=0.001))
+            rw = room._raw.copy()
+            for q in raw_q:
+                rw |= room.paint(q, R=0.001)
+            sp = room.spot(rw)
             if not r1[sp]:
                 return False
         return True
@@ -767,73 +819,7 @@ def wall_art(U, room, over=None, w=0.8, cz=1.55, salt='art', score=None):
     return None
 
 
-def rug_under_sofa(U, room, sofa):
-    s_rot = sofa['rot']
-    sw, sd = sofa['box']['size']
-    cts = [p for p in U.pieces_in(room.id, 'table_coffee')]
-    x_near = sd / 2 - 0.30
-    x_far = x_near + 1.6
-    yc = 0.0
-    if cts:
-        ct = min(cts, key=lambda p: dist(p['at'], sofa['at']))
-        lx, ly = LF.to_local(ct['at'], sofa['at'], s_rot)
-        cw, cd = ct['box']['size']
-        if 0.0 < lx < 2.6 and abs(ly) < sw / 2:
-            x_far = max(x_far, lx + max(cw, cd) / 2 * 0.6 + 0.45)
-    for rw in (sw + 0.4, sw + 0.2, sw):
-        for rd in (x_far - x_near, x_far - x_near - 0.2, 1.4, 1.2):
-            rw2 = round(min(3.0, max(1.4, rw)) * 10) / 10
-            rd2 = round(min(2.4, max(1.2, rd)) * 10) / 10
-            for shift in (0.0, -0.1, 0.1, -0.2):
-                cx = x_near + rd2 / 2 + shift
-                c = loc2plan(sofa['at'], s_rot, cx, yc)
-                p = U.try_place(room, 'rug', rw2, rd2, c, s_rot, 0.0, 0.015, dict(border=1), seed_of(U.num, 'rug') % 2,
-                                rug=True, inset=0.05)
-                if p:
-                    return p
-    return None
 
-
-def floor_lamp(U, room, sofa):
-    sw, sd = sofa['box']['size']
-    order = (1, -1) if seed_of(U.num, 'lamp') % 2 else (-1, 1)
-    for side in order:
-        for dx in (0.22, 0.35, 0.10):
-            c = loc2plan(sofa['at'], sofa['rot'], -sd / 2 + dx, side * (sw / 2 + 0.26))
-            p = U.try_place(room, 'floor_lamp', 0.40, 0.40, c, sofa['rot'], 0.0, 1.65, dict(), 0, inset=0.0,
-                            skip_tags=('window',))
-            if p:
-                return p
-    return None
-
-
-def armchair(U, room, sofa):
-    if room.area < 21.0:
-        return None
-    cts = U.pieces_in(room.id, 'table_coffee')
-    if not cts:
-        return None
-    ct = min(cts, key=lambda p: dist(p['at'], sofa['at']))
-    lx, ly = LF.to_local(ct['at'], sofa['at'], sofa['rot'])
-    if not (0.2 < lx < 2.2):
-        return None
-    cw = ct['box']['size'][0]
-    sw = sofa['box']['size'][0]
-    order = (1, -1) if seed_of(U.num, 'arm') % 2 else (-1, 1)
-    for side in order:
-        for off in (0.62, 0.72):
-            y = side * max(cw / 2 + off, sw / 2 - 0.25)
-            c = loc2plan(sofa['at'], sofa['rot'], lx + 0.05, y)
-            v = (ct['at'][0] - c[0], ct['at'][1] - c[1])
-            rot = heading(v)
-            rot = rot - side * 0.0
-            sp = rect(c, 0.82, 0.84, rot)
-            front = rect(loc2plan(c, rot, 0.62, 0.0), 0.6, 0.4, rot)
-            p = U.try_place(room, 'armchair', 0.82, 0.84, c, rot, 0.0, 0.9, dict(), seed_of(U.num, 'armc') % 2,
-                            solid_poly=sp, inset=0.0)
-            if p:
-                return p
-    return None
 
 
 def sideboard(U, room, near=None):
@@ -898,13 +884,15 @@ def tv_console(U, room, tv):
         access = rect(loc2plan(c, tv['rot'], cd / 2 + 0.3, 0.0), cw, 0.6, tv['rot'])
         if not U.clear([access], 0.0, 0.6, ignore=(tv['node'],), skip_tags=('window',)):
             continue
+        # a wide console must not cut the room's doors apart (it did, in ~40
+        # living rooms, before the renders' rebuild)
+        if not U.reach_ok(room, rect(c, cw, cd, tv['rot'])):
+            continue
         tv['params']['console_w'] = cw
         tv['cls'] = '%s_c%03d' % (tv['cls'], round(cw * 100))
         tv['box'] = dict(centre=[round(c[0], 4), round(c[1], 4)], size=[cw, cd], heading=tv['box'].get('heading', tv['rot']))
         tv.pop('_bounds', None)
-        for ob in U.obs:
-            if ob.piece is tv:
-                ob.poly = rect(c, cw + 0.04, cd + 0.04, tv['rot'])
+        U.reshape(tv, rect(c, cw + 0.04, cd + 0.04, tv['rot']))
         return True
     # no wall for a console: the screen on the wall over a slim shelf
     cw, cd = max(1.0, round(w + 0.1, 2)), 0.32
@@ -914,104 +902,12 @@ def tv_console(U, room, tv):
     c = (tv['at'][0] + f[0] * (cd - d) / 2, tv['at'][1] + f[1] * (cd - d) / 2)
     tv['box'] = dict(centre=[round(c[0], 4), round(c[1], 4)], size=[cw, cd], heading=tv['box'].get('heading', tv['rot']))
     tv.pop('_bounds', None)
-    for ob in U.obs:
-        if ob.piece is tv:
-            ob.poly = rect(c, cw + 0.04, cd + 0.04, tv['rot'])
+    U.reshape(tv, rect(c, cw + 0.04, cd + 0.04, tv['rot']))
     return False
 
 
-def herbs_on_run(U, room):
-    """Basil, rosemary and chives at the back of the worktop, clear of the
-    sink and the hob (and of a strip where the run steps round a column)."""
-    legs = U.pieces_in(room.id, 'kitchen_run')
-    if not legs:
-        return None
-    for leg in sorted(legs, key=lambda p: -p['params']['w']):
-        P = leg['params']
-        W, D = P['w'], P['d']
-        prof = P.get('profile')
-        busy = [P[k] for k in ('sink_y', 'hob_y') if k in P]
-
-        def full(y0, y1):
-            if not prof:
-                return True
-            return any(a <= y0 + 1e-3 and b >= y1 - 1e-3 and dep >= D - 0.03 for a, b, dep in prof)
-        best = None
-        for k in range(-40, 41):
-            y = k * 0.05
-            if abs(y) > W / 2 - 0.25:
-                continue
-            if any(abs(y - b) < 0.42 for b in busy):
-                continue
-            if not full(y - 0.24, y + 0.24):
-                continue
-            sc = -min([abs(y - b) for b in busy] + [9.0]) + 0.1 * abs(y)
-            if best is None or sc < best[0]:
-                best = (sc, y)
-        if best is None:
-            continue
-        x = -D / 2 + 0.17
-        c = loc2plan(leg['at'], leg['rot'], x, best[1])
-        return U.add(room, 'plant_herbs', 0.42, 0.14, c, leg['rot'], 0.90, 1.30, dict(tray=1),
-                     seed_of(U.num, 'herbs') % 3, rect(c, 0.42, 0.14, leg['rot']), None, z=0.90)
-    return None
 
 
-def fridge(U, room):
-    legs = U.pieces_in(room.id, 'kitchen_run')
-    if not legs:
-        return None
-    for leg in sorted(legs, key=lambda p: -p['params']['w']):
-        P = leg['params']
-        W, D = P['w'], P['d']
-        if P.get('profile'):
-            continue
-        for side in (1, -1):
-            c = loc2plan(leg['at'], leg['rot'], 0.0, side * (W / 2 + 0.31))
-            # built in: a wall right beyond its far side
-            far = loc2plan(leg['at'], leg['rot'], 0.0, side * (W / 2 + 0.62 + 0.06))
-            if pip([far[0]], [far[1]], room.rings)[0]:
-                continue
-            sp = rect(c, 0.60, D, leg['rot'])
-            access = rect(loc2plan(c, leg['rot'], D / 2 + 0.4, 0.0), 0.6, 0.8, leg['rot'])
-            if not room.contains(c, 0.60, D, leg['rot'], back=0.04):
-                continue
-            if not U.clear([sp], 0.0, 2.25) or not U.clear([access], 0.0, 1.5):
-                continue
-            if not U.reach_ok(room, sp):
-                continue
-            return U.add(room, 'fridge_tower', 0.60, D, c, leg['rot'], 0.0, 2.25,
-                         dict(hand=side), 0, sp, sp)
-    return None
-
-
-def dining(U, room):
-    out = []
-    for t in U.pieces_in(room.id, 'table_round'):
-        dia = t['params']['dia']
-        c = t['at']
-        out.append(U.add(room, 'pendant', 0.42, 0.42, c, 0.0, 1.45, U.ceiling,
-                         dict(ceiling=U.ceiling, drop=1.55), 0, rect(c, 0.42, 0.42, 0.0), None))
-        what = pick(U.num, 'dine', ('decor_bowl', 'decor_table_plant', 'decor_vase'))
-        spec = LF.KIT[what].KINDS[what]
-        w, d, extra = spec['sizes']['M']
-        out.append(U.add(room, what, w, d, c, t['rot'], 0.75, 1.3, dict(extra), seed_of(U.num, 'dine2') % 3,
-                         rect(c, w, d, t['rot']), None, z=0.75))
-    return out
-
-
-def rug_bed(U, room, bed):
-    bw, bd = bed['box']['size']
-    for rw in (bw + 0.8, bw + 0.6, bw + 0.4):
-        for rd in (1.8, 1.6, 1.4):
-            for shift in (0.45, 0.35, 0.55):
-                c = loc2plan(bed['at'], bed['rot'], shift, 0.0)
-                rw2 = round(rw * 10) / 10
-                p = U.try_place(room, 'rug_bedroom', rw2, rd, c, bed['rot'], 0.0, 0.013, dict(),
-                                0, rug=True, inset=0.05)
-                if p:
-                    return p
-    return None
 
 
 def wardrobe(U, room):
@@ -1042,45 +938,489 @@ def wardrobe(U, room):
     return None
 
 
+
+
+
+
+# ------------------------------------------------------------ the owner's renders (Nov 2026)
+# The rules below dress a flat after the ten renders the owner sent on
+# 2026-11-26: a greige handleless kitchen with a marble top between tall
+# walnut columns (a black fridge in one), an island where the living room
+# has the floor, a rectangular walnut dining table with four curved chairs,
+# a white boucle sofa (an L where it fits) with a loveseat and a pouf round
+# a small dark table, big bird-of-paradise and monstera plants, a hall
+# wardrobe wall, an A/C unit on the loggia. Gone: rugs, floor lamps, the
+# armchair, sideboard, pothos shelf, herbs, the dining pendant, bath mats,
+# bathroom plants and baskets, loggia troughs.
+GREAT_PLANTS = ('plant_strelitzia', 'plant_monstera')
+ISLAND_AREA = 30.0          # m2 of living room before an island is tried (the 1-bed flats of render 4 have none)
+
+
+def long_wall(room):
+    walls = [w for w in room.walls if not w[5]]
+    return max(walls, key=lambda w: w[4]) if walls else None
+
+
+def kitchen_aisles(U, room, depth=0.9):
+    """The floor a cook stands on in front of every run leg."""
+    out = []
+    for leg in U.pieces_in(room.id, 'kitchen_run'):
+        W, D = leg['params']['w'], leg['params']['d']
+        out.append(rect(loc2plan(leg['at'], leg['rot'], D / 2 + depth / 2, 0.0), W, depth, leg['rot']))
+    for isl in U.pieces_in(room.id, 'kitchen_island'):
+        Li, Di = isl['params']['w'], isl['params']['d']
+        out.append(rect(isl['at'], Li + 0.2, Di + 1.8, isl['rot']))
+    return out
+
+
+def restyle_kitchen(U):
+    """The run as the renders draw it: handleless greige fronts (int_mint,
+    the bars in the same colour), a marble worktop and splashback; the hob's
+    chimney hood in steel (`chrome`, not the facade's frame_light)."""
+    for p in U.pieces:
+        if p['kind'] == 'kitchen_run':
+            p['params'].update(front='int_mint', top='int_marble', handle='int_mint')
+            p['cls'] += '_gm'
+        elif p['kind'] == 'hob':
+            p['params']['steel'] = 'chrome'
+            p['cls'] += '_cr'
+
+
+def take_dining(U, room):
+    """The drawn round table and its three chairs, taken out (the renders
+    seat four at a long walnut table). -> [(centre, [pieces])]"""
+    out = []
+    for t in U.pieces_in(room.id, 'table_round'):
+        chairs = [p for p in U.pieces_in(room.id, 'chair') if dist(p['at'], t['at']) < 1.3]
+        U.forget([t] + chairs)
+        out.append((t['at'], [t] + chairs))
+    return out
+
+
+def dining_seats(c, rot, L, W):
+    """Two chairs on each long side of a table L long, W wide, facing it,
+    pushed in (the seat's front under the top)."""
+    out = []
+    for side in (1, -1):
+        for y in (-L * 0.25, L * 0.25):
+            out.append((loc2plan(c, rot, side * (W / 2 + 0.16), y), (rot + 180.0) if side > 0 else rot))
+    return out
+
+
+def place_dining(U, room, taken):
+    for c0, old in taken:
+        wl = long_wall(room)
+        h0 = heading(wl[2]) if wl else 0.0
+        sizes = ((1.6, 0.9), (1.4, 0.85), (1.2, 0.8)) if room.area >= ISLAND_AREA else ((1.4, 0.85), (1.2, 0.8))
+        avoid = kitchen_aisles(U, room)
+        R = 12 if U.pieces_in(room.id, 'kitchen_island') else 6
+        shifts = sorted(((dx * 0.1, dy * 0.1) for dx in range(-R, R + 1) for dy in range(-R, R + 1)),
+                        key=lambda s: math.hypot(*s))
+        done = None
+        for L, W in sizes:
+            for rot in (h0 + 90.0, h0):
+                for dx, dy in shifts:
+                    c = (c0[0] + dx, c0[1] + dy)
+                    D = W + 0.84                  # the chairs on both long sides
+                    if not room.contains(c, L, D, rot, inset=0.0):
+                        continue
+                    seats = dining_seats(c, rot, L, W)
+                    polys = [rect(c, L, W, rot)] + [rect(cc, 0.50, 0.52, cr) for cc, cr in seats]
+                    if not U.clear(polys, 0.0, 0.85):
+                        continue
+                    if any(sat(q, a) for q in polys for a in avoid):
+                        continue
+                    if not U.reach_ok(room, polys):
+                        continue
+                    done = (L, W, c, rot, polys)
+                    break
+                if done:
+                    break
+            if done:
+                break
+        if not done:
+            # no floor for the long table: the drawn set stays, in walnut and greige
+            U.restore(old)
+            t = old[0]
+            what = 'decor_vase'
+            w, d, extra = LF.KIT[what].KINDS[what]['sizes']['S']
+            U.add(room, what, w, d, t['at'], t['rot'], 0.75, 1.2, dict(extra), seed_of(U.num, 'dine2') % 3,
+                  rect(t['at'], w, d, t['rot']), None, z=0.75)
+            continue
+        L, W, c, rot, polys = done
+        top = rect(c, L, W, rot)
+        U.add(room, 'table_dining', L, W, c, rot, 0.0, 0.76, dict(), 0, top, top)
+        for cc, crot in dining_seats(c, rot, L, W):
+            U.add(room, 'chair', 0.50, 0.52, cc, crot, 0.0, 0.80, dict(), 0, rect(cc, 0.50, 0.52, crot),
+                  rect(cc, 0.46, 0.46, crot))
+        what = 'decor_vase'
+        w, d, extra = LF.KIT[what].KINDS[what]['sizes']['S']
+        U.add(room, what, w, d, c, rot, 0.75, 1.2, dict(extra), seed_of(U.num, 'dine2') % 3,
+              rect(c, w, d, rot), None, z=0.75)
+        # a pair of pictures on the nearest wall
+        a1 = wall_art(U, room, w=0.5, cz=1.55, salt='art_dine', score=lambda q: dist(q, c) if dist(q, c) < 2.6 else None)
+        if a1:
+            wall_art(U, room, w=0.5, cz=1.55, salt='art_dine2',
+                     score=lambda q: abs(dist(q, a1['at']) - 0.62) * 4 + dist(q, c) * 0.2
+                     if abs(dist(q, a1['at']) - 0.62) < 0.08 else None)
+
+
+def island(U, room):
+    """A kitchen island parallel to the longest run, 1.0-1.15 m off its
+    front, with a 1 m aisle on its room side too; the run's hob moves onto
+    it. Only in living rooms of ISLAND_AREA and more."""
+    if room.area < ISLAND_AREA:
+        return None
+    legs = sorted(U.pieces_in(room.id, 'kitchen_run'), key=lambda p: -p['params']['w'])
+    if not legs:
+        return None
+    leg = legs[0]
+    W, D = leg['params']['w'], leg['params']['d']
+    if W < 1.8:
+        return None
+    rot = leg['rot']
+    Di = 0.95
+    for Li in (2.2, 2.0, 1.8):
+        if Li > W + 0.4:
+            continue
+        for gap in (1.05, 1.15, 1.0):
+            for t in (0.0, 0.15, -0.15, 0.3, -0.3, 0.45, -0.45):
+                if abs(t) + Li / 2 > W / 2 + 0.35:
+                    continue
+                c = loc2plan(leg['at'], rot, D / 2 + gap + Di / 2, t)
+                body = rect(c, Li, Di, rot)
+                oc = loc2plan(c, rot, Di / 2 + 0.5, 0.0)
+                out_aisle = rect(oc, Li, 1.0, rot)
+                in_aisle = rect(loc2plan(leg['at'], rot, D / 2 + gap / 2, t), Li, gap - 0.04, rot)
+                if not room.contains(c, Li, Di, rot, inset=0.0) or not room.contains(oc, Li, 1.0, rot, inset=0.0):
+                    continue
+                if not U.clear([body], 0.0, 1.0):
+                    continue
+                if not U.clear([in_aisle, out_aisle], 0.0, 1.2, skip_tags=('window', 'throat')):
+                    continue
+                if not U.clear([rect(c, 0.45, 0.45, rot)], 1.55, U.ceiling):
+                    continue
+                if not U.reach_ok(room, body):
+                    continue
+                p = U.add(room, 'kitchen_island', Li, Di, c, rot, 0.0, round(U.ceiling, 3),
+                          dict(ceiling=round(U.ceiling, 2)), 0, body, body)
+                if not p:
+                    continue
+                # the hob moves from the run onto the island
+                for hb in U.pieces_in(room.id, 'hob'):
+                    U.forget([hb])
+                for lg in U.pieces_in(room.id, 'kitchen_run'):
+                    lp = lg['params']
+                    if 'hob_y' in lp:
+                        lg['cls'] = lg['cls'].replace('_h%d_%d' % (round(lp['hob_x'] * 100), round(lp['hob_y'] * 100)), '')
+                        lp.pop('hob_x', None)
+                        lp.pop('hob_y', None)
+                        lg['cls'] += '_nohob'
+                return p
+    return None
+
+
+def tall_columns(U, room):
+    """Floor-to-ceiling walnut columns at the ends of the longest straight
+    run (renders 4, 5, 7): the first a black fridge beside a lit niche, the
+    second two ovens or the niche alone. The run's ends meet the walls on
+    the sheets, so a column takes the END of the run: the leg is shortened
+    by the column's width (its sink and hob stay where they are), never at
+    an end that turns a corner into another leg."""
+    legs = [p for p in sorted(U.pieces_in(room.id, 'kitchen_run'), key=lambda p: -p['params']['w'])
+            if not p['params'].get('profile')]
+    if not legs:
+        return
+    leg = legs[0]
+    others = [p for p in U.pieces_in(room.id, 'kitchen_run') if p is not leg]
+    D = leg['params']['d']
+    rot = leg['rot']
+    H = round(min(U.ceiling - 0.01, 3.3), 2)
+    order = (1, -1) if seed_of(U.num, 'tall') % 2 else (-1, 1)
+    plans = [((1.00, 1), (0.62, 1)), ((1.00, 2), (0.45, 0))]
+    k = 0
+    for side in order:
+        if k >= len(plans):
+            break
+        for tw, app in plans[k]:
+            P = leg['params']
+            W = P['w']
+            if W - tw < 1.6:
+                continue
+            yc = -side * tw / 2                       # the shortened run's centre, in the leg's frame
+            Wn = W - tw
+            if any(abs(P[q] - yc) + 0.42 > Wn / 2 for q in ('sink_y', 'hob_y') if q in P):
+                continue
+            c = loc2plan(leg['at'], rot, 0.0, side * (W / 2 - tw / 2))
+            sp = rect(c, tw, D, rot)
+            if not room.contains(c, tw, D, rot, back=0.04):
+                continue
+            if any(sat(rect(c, tw + 0.12, D + 0.12, rot), ob.poly) for ob in U.obs if ob.piece in others):
+                continue
+            access = rect(loc2plan(c, rot, D / 2 + 0.4, 0.0), tw, 0.8, rot)
+            if not U.clear([sp], 0.0, H, ignore=(leg['node'],)) or not U.clear([access], 0.0, 1.5, ignore=(leg['node'],)):
+                continue
+            # the run, shortened
+            nc = loc2plan(leg['at'], rot, 0.0, yc)
+            P['w'] = round(Wn, 3)
+            for q in ('sink_y', 'hob_y'):
+                if q in P:
+                    P[q] = round(P[q] - yc, 3)
+            leg['at'] = [round(nc[0], 4), round(nc[1], 4)]
+            leg['box'] = dict(leg['box'], centre=list(leg['at']), size=[round(Wn, 3), leg['box']['size'][1]])
+            leg['cls'] += '_c%s%d' % ('p' if side > 0 else 'n', round(tw * 100))
+            leg.pop('_bounds', None)
+            U.reshape(leg, rect(nc, Wn + 0.04, D + 0.04, rot))
+            if U.add(room, 'tall_walnut', tw, D, c, rot, 0.0, H, dict(h=H, app=app, hand=-side), 0, sp, sp):
+                k += 1
+            break
+
+def sofa_group(U, room, sofa):
+    """The sofa made an L where the floor allows (a chaise at one end), a
+    loveseat across the coffee table, a pouf beside it."""
+    sw, sd = sofa['box']['size']
+    srot = sofa['rot']
+    cts = U.pieces_in(room.id, 'table_coffee')
+    ct = min(cts, key=lambda p: dist(p['at'], sofa['at'])) if cts else None
+    if ct and dist(ct['at'], sofa['at']) > 2.6:
+        ct = None
+    hw = sw / 2
+    order = (1, -1) if seed_of(U.num, 'chaise') % 2 else (-1, 1)
+    chaise = 0
+    if sd >= 0.85 and sw >= 1.6:
+        span = sw - 0.20
+        n = 1 if span < 0.95 else (2 if span < 1.85 else 3)
+        mw = span / n
+        for s in order:
+            for clen in (1.55, 1.40):
+                ext = clen - sd
+                cc = loc2plan(sofa['at'], srot, sd / 2 + ext / 2, s * (hw - mw / 2))
+                poly = rect(cc, mw, ext, srot)
+                if not room.contains(cc, mw, ext, srot, inset=0.0):
+                    continue
+                ign = (sofa['node'],) + ((ct['node'],) if ct else ())
+                if not U.clear([poly], 0.0, 0.8, ignore=ign):
+                    continue
+                move = None
+                if ct and sat(poly, rect(ct['at'], 0.78, 0.78, srot)):
+                    lx, ly = LF.to_local(ct['at'], sofa['at'], srot)
+                    for k in range(1, 7):
+                        ny = ly - s * 0.08 * k
+                        if abs(ny) > hw:
+                            break
+                        q = loc2plan(sofa['at'], srot, lx, ny)
+                        qp = rect(q, 0.78, 0.78, srot)
+                        if sat(poly, qp):
+                            continue
+                        if U.clear([qp], 0.0, 0.4, ignore=ign) and room.contains(q, 0.78, 0.78, srot, inset=0.0):
+                            move = q
+                            break
+                    if move is None:
+                        continue
+                whole_c = loc2plan(sofa['at'], srot, (clen - sd) / 2, 0.0)
+                whole = rect(whole_c, sw, clen, srot)
+                if not U.reach_ok(room, whole):
+                    continue
+                chaise = s
+                sofa['params'].update(chaise=s, chaise_len=clen)
+                sofa['cls'] += '_ch%s%d' % ('p' if s > 0 else 'n', round(clen * 100))
+                sofa['box'] = dict(centre=[round(whole_c[0], 4), round(whole_c[1], 4)], size=[sw, clen],
+                                   heading=sofa['box'].get('heading', srot))
+                sofa.pop('_bounds', None)
+                U.reshape(sofa, rect(whole_c, sw + 0.04, clen + 0.04, srot))
+                if move is not None:
+                    ct['at'] = [round(move[0], 4), round(move[1], 4)]
+                    ct['box'] = dict(ct['box'], centre=list(ct['at']))
+                    U.reshape(ct, rect(move, 0.78, 0.78, srot))
+                break
+            if chaise:
+                break
+    if ct is None:
+        return
+    lx, ly = LF.to_local(ct['at'], sofa['at'], srot)
+    # the loveseat: across the table, on the side away from the chaise
+    if room.area >= 22.0 and 0.3 < lx < 2.4:
+        done = False
+        for s in [q for q in order if q != chaise]:
+            for lw, ld in ((1.6, 0.9), (1.4, 0.88)):
+                lrot = srot + 90.0 if s > 0 else srot - 90.0
+                for gap in (0.40, 0.55, 0.30):
+                    for dx in (0.0, 0.2, 0.4, 0.6):
+                        x = lx + dx
+                        y = ly + s * (0.38 + gap + ld / 2)
+                        c = loc2plan(sofa['at'], srot, x, y)
+                        sp = rect(c, lw, ld, lrot)
+                        if U.try_place(room, 'loveseat', lw, ld, c, lrot, 0.0, 0.8, dict(),
+                                       seed_of(U.num, 'love') % 2, solid_poly=sp, inset=0.0):
+                            done = True
+                            break
+                    if done:
+                        break
+                if done:
+                    break
+            if done:
+                break
+    # the pouf: beside the table, else in front of it
+    sides = [q for q in order if q == chaise] + [q for q in order if q != chaise]
+    spots = [(lx, ly + s * (0.38 + 0.06 + 0.28)) for s in sides] + [(lx + 0.38 + 0.36, ly)]
+    for x, y in spots:
+        c = loc2plan(sofa['at'], srot, x, y)
+        if U.try_place(room, 'pouf', 0.55, 0.55, c, srot, 0.0, 0.39, dict(), 0, inset=0.0):
+            break
+
+
+def big_plants(U, room, n, sizes=('L', 'M', 'S'), salt='big'):
+    kinds = GREAT_PLANTS if seed_of(U.num, salt, room.id) % 2 else GREAT_PLANTS[::-1]
+    placed = []
+
+    def far(c):
+        return sum(max(0.0, 2.8 - dist(c, q['at'])) * 2.0 for q in placed)
+    for i in range(n):
+        p = plant_try(U, room, (kinds[i % 2], kinds[(i + 1) % 2]), lambda r: spots_free(U, room, r),
+                      lambda c: near_window_score(U, room, c) * 0.6 + far(c), sizes=sizes, salt='%s%d' % (salt, i))
+        if p:
+            placed.append(p)
+    return placed
+
+
+def living(U, room):
+    sofas = U.pieces_in(room.id, 'sofa')
+    tvs = U.pieces_in(room.id, 'tv')
+    sofa = max(sofas, key=lambda p: p['box']['size'][0]) if sofas else None
+    # the coffee table is a 0.7 m disc now, not the drawn 1.2 x 0.6
+    for ct in U.pieces_in(room.id, 'table_coffee'):
+        U.reshape(ct, rect(ct['at'], 0.78, 0.78, ct['rot']))
+    for tv in tvs:
+        tv_console(U, room, tv)
+    curtains(U, room)
+    taken = take_dining(U, room)
+    island(U, room)
+    tall_columns(U, room)
+    place_dining(U, room, taken)
+    if sofa:
+        wall_art(U, room, over=sofa, w=min(1.0, round(sofa['box']['size'][0] * 0.45, 1)), cz=1.5, salt='art_sofa')
+        sofa_group(U, room, sofa)
+    big_plants(U, room, 3 if room.area >= ISLAND_AREA else 2)
+
+
+def dress_bed(U, bed):
+    """White linen and a terracotta or greige throw (renders 5, 6, 7 / 4, 12)."""
+    throw = ('int_fabric_orange', 'int_fabric_sofa')[seed_of(U.num, 'throw', bed['room']) % 2]
+    bed['params'].update(duvet='int_fabric_white', throw=throw)
+    bed['cls'] += '_w%s' % throw[11]
+
+
+def vanity(U, room):
+    """The bedroom's vanity (renders 4, 5, 11, 12) where the bedroom kit
+    has one: a free wall, near the window, a sitting zone in front."""
+    if 'vanity' not in LF.KIT or U.pieces_in(room.id, 'vanity'):
+        return None
+    mod = LF.KIT['vanity']
+    w, d = getattr(mod, 'DEFAULT_SIZE', {}).get('vanity', (1.0, 0.45))
+    best = None
+    for c, rot, wl, t in U.wall_spots(room, w, d, gap=0.005, step=0.1):
+        sc = near_window_score(U, room, c)
+        if best is not None and sc >= best[0]:
+            continue
+        if not room.contains(c, w, d, rot, back=0.04):
+            continue
+        sp = rect(c, w, d, rot)
+        access = rect(loc2plan(c, rot, d / 2 + 0.35, 0.0), w, 0.7, rot)
+        if not U.clear([sp], 0.0, 1.7) or not U.clear([access], 0.0, 1.0):
+            continue
+        best = (sc, c, rot, sp)
+    if best:
+        sc, c, rot, sp = best
+        if U.reach_ok(room, sp):
+            return U.add(room, 'vanity', w, d, c, rot, 0.0, 1.7, dict(), seed_of(U.num, 'van') % 2, sp, sp)
+    return None
+
+
+def bedroom(U, room):
+    beds = U.pieces_in(room.id, 'bed_double')
+    curtains(U, room)
+    for bed in beds:
+        dress_bed(U, bed)
+    wardrobe(U, room)
+    vanity(U, room)
+    big_plants(U, room, 1, sizes=('L', 'M', 'S'), salt='bed')
+    for bed in beds[:1]:
+        wall_art(U, room, over=bed, w=min(1.0, round(bed['box']['size'][0] * 0.5, 1)), cz=1.62, salt='art_bed')
+
+
+def hall_wardrobe(U, room):
+    """The renders' hall: a wardrobe wall of greige doors and lit walnut
+    shelves on the longest free wall, floor to just under the ceiling, with
+    a passage of 0.9 m in front."""
+    H = round(min(U.ceiling - 0.02, 3.3), 2)
+    d = 0.60
+    for w in (3.0, 2.6, 2.2, 1.8):
+        best = None
+        for c, rot, wl, t in U.wall_spots(room, w, d, gap=0.005, step=0.05):
+            sc = -wl[4] + 0.1 * min(t - w / 2, wl[4] - t - w / 2)
+            if best is not None and sc >= best[0]:
+                continue
+            if not room.contains(c, w, d, rot, back=0.04):
+                continue
+            sp = rect(c, w, d, rot)
+            access = rect(loc2plan(c, rot, d / 2 + 0.45, 0.0), w, 0.9, rot)
+            if not U.clear([sp], 0.0, H) or not U.clear([access], 0.0, 1.8, skip_tags=('throat',)):
+                continue
+            if not room.contains(loc2plan(c, rot, d / 2 + 0.45, 0.0), w, 0.9, rot, inset=0.0):
+                continue
+            best = (sc, c, rot, sp)
+        if best:
+            sc, c, rot, sp = best
+            if U.reach_ok(room, sp):
+                return U.add(room, 'hall_wardrobe', w, d, c, rot, 0.0, H, dict(h=H), seed_of(U.num, 'hw') % 3, sp, sp)
+    return None
+
+
+def hall(U, room):
+    if room.area < 4.0:
+        return
+    hall_wardrobe(U, room)
+    if room.area >= 6.0:
+        plant_try(U, room, ('plant_strelitzia', 'plant_monstera'), lambda r: U.corner_spots(room, r),
+                  lambda c: 0.0, sizes=('M', 'S'), salt='hall')
+
+
+def loggia(U, room):
+    """The renders' loggia: a black A/C unit against the facade wall in the
+    corner away from the door, and one big plant in a dark pot."""
+    doors = [dr['centre'] for dr in room.r.get('doors') or []]
+    z = 0.02
+    best = None
+    for c, rot, wl, t in U.wall_spots(room, 0.80, 0.30, gap=0.01, step=0.1):
+        a, b, u, n, L, hole = wl
+        if doors and not any(abs((dc[0] - a[0]) * n[0] + (dc[1] - a[1]) * n[1]) < 0.35 for dc in doors):
+            continue                                  # the facade wall: the one the door is in
+        sc = -min([dist(c, dc) for dc in doors] + [9.0])
+        if best is not None and sc >= best[0]:
+            continue
+        if not room.contains(c, 0.80, 0.30, rot, back=0.0):
+            continue
+        sp = rect(c, 0.80, 0.30, rot)
+        if not U.clear([sp], z, z + 0.75):
+            continue
+        if not U.reach_ok(room, sp):
+            continue
+        best = (sc, c, rot, sp)
+    if best:
+        sc, c, rot, sp = best
+        U.add(room, 'ac_unit', 0.80, 0.30, c, rot, z, z + 0.72, dict(), 0, sp, sp, z)
+    kinds = GREAT_PLANTS if seed_of(U.num, 'logp', room.id) % 2 else GREAT_PLANTS[::-1]
+    plant_try(U, room, kinds, lambda r: U.corner_spots(room, r),
+              lambda c: -min([dist(c, dc) for dc in doors] + [9]), sizes=('M', 'S'), salt='logtree', z=z)
+
+
 def bathroom(U, room, washer_left):
+    """A towel rail by the shower, the wc's roll holder and a cabinet over
+    it, the flat's washing machine. No mat, plant or basket (the renders)."""
     fixtures = [p for p in U.pieces_in(room.id) if p['kind'] in ('bath', 'shower', 'shower_corner', 'bath_corner')]
     wcs = U.pieces_in(room.id, 'wc')
     basins = U.pieces_in(room.id, 'basin')
     seed = seed_of(U.num, 'bath', room.id) % 3
-    # the mat
-    placed = False
-    for fx in fixtures + basins:
-        b = fx['box']
-        if b.get('axis_aligned'):
-            sx, sy = b['size']
-            R = min(sx, sy)
-            dd = 0.29 * R + 0.30
-            for dd2 in (dd, dd + 0.08):
-                c = (b['centre'][0] + fwd(b['heading'])[0] * dd2, b['centre'][1] + fwd(b['heading'])[1] * dd2)
-                p = U.try_place(room, 'bath_mat', 0.70, 0.45, c, b['heading'], 0.0, 0.016, dict(), seed,
-                                rug=True, inset=0.03, ignore=(fx['node'],))
-                if p:
-                    placed = True
-                    break
-        else:
-            w, d = b['size']
-            ys = [0.0]
-            if fx['kind'] == 'shower':
-                ys = [w / 2 - 0.45, 0.0]
-            ys = ys + [w / 4, -w / 4]
-            for y in ys:
-                for mw in (0.8, 0.6, 0.5):
-                    c = loc2plan(fx['at'], fx['rot'], d / 2 + 0.25, y)
-                    p = U.try_place(room, 'bath_mat', mw, 0.45, c, fx['rot'], 0.0, 0.016, dict(), seed,
-                                    rug=True, inset=0.03, ignore=(fx['node'],))
-                    if p:
-                        placed = True
-                        break
-                if placed:
-                    break
-        if placed:
-            break
-    # the wc's roll holder and the cabinet over it
     for wc in wcs:
         w, d = wc['box']['size']
         for side in ((1, -1) if seed % 2 else (-1, 1)):
@@ -1093,7 +1433,6 @@ def bathroom(U, room, washer_left):
             continue
         U.try_place(room, 'wall_cabinet', 0.60, 0.18, c, wc['rot'], 1.42, 2.04, dict(z0=1.44, h=0.6), seed,
                     back=0.03, ignore=(wc['node'],), inset=0.0)
-    # a towel rail by the bath / shower
     tgt = fixtures[0]['at'] if fixtures else (basins[0]['at'] if basins else None)
     best = None
     for c, rot, wl, t in U.wall_spots(room, 0.5, 0.12, gap=0.005, step=0.05):
@@ -1109,7 +1448,6 @@ def bathroom(U, room, washer_left):
         sc, c, rot = best
         U.add(room, 'towel_rail', 0.5, 0.12, c, rot, 0.18, 1.2, dict(h=0.95, finish=seed % 2), seed,
               rect(c, 0.5, 0.12, rot), None)
-    # a washing machine: one a flat
     if washer_left[0]:
         best = None
         for c, rot, wl, t in U.wall_spots(room, 0.6, 0.6, gap=0.01, step=0.05):
@@ -1127,152 +1465,9 @@ def bathroom(U, room, washer_left):
             best = (sc, c, rot, sp)
         if best:
             sc, c, rot, sp = best
-            # its reach test was on a copy: run it again, it is cheap
             if U.reach_ok(room, sp):
                 U.add(room, 'washing_machine', 0.6, 0.6, c, rot, 0.0, 0.9, dict(), 0, sp, sp)
                 washer_left[0] = False
-
-    # a plant and a basket in the corners
-    tgt2 = basins[0]['at'] if basins else None
-
-    def corners(r):
-        return U.corner_spots(room, r)
-    p = None
-    for kind, w in (('bath_plant', 0.35), ('bath_plant', 0.28)):
-        for c, rot in sorted(corners(w / 2), key=lambda t: dist(t[0], tgt2) if tgt2 else 0):
-            sp = rect(c, 0.22, 0.22, rot)
-            p = U.try_place(room, 'bath_plant', w, w, c, rot, 0.0, 0.85, dict(species=seed % 2, pot=(seed // 2) % 2),
-                            seed, solid_poly=sp, inset=0.0)
-            if p:
-                break
-        if p:
-            break
-    if room.area > 4.5:
-        for c, rot in corners(0.2):
-            sp = rect(c, 0.40, 0.40, rot)
-            if U.try_place(room, 'laundry_basket', 0.40, 0.40, c, rot, 0.0, 0.6, dict(), 0, solid_poly=sp, inset=0.0):
-                break
-
-
-def loggia(U, room):
-    """A planter along the balustrade (the side away from the doors) and a
-    pair of pots or a tree in a corner."""
-    doors = [dr['centre'] for dr in room.r.get('doors') or []]
-    z = 0.02
-    seed = seed_of(U.num, 'loggia', room.id) % 3
-    # planters along the balustrade: one, and one more for every 3 m past
-    # the first 2 m of it (a long loggia is not one trough at one end)
-    rail = max([wl[4] for wl in room.walls
-                if not any(abs((dc[0] - wl[0][0]) * wl[3][0] + (dc[1] - wl[0][1]) * wl[3][1]) < 0.35 for dc in doors)]
-               or [0.0])
-    n_pl = 1 + max(0, int((rail - 2.0) // 3.0))
-    planters = []
-    for k in range(n_pl):
-        for size in ('M', 'S'):
-            w, d, extra = LF.KIT['planter_balcony'].KINDS['planter_balcony']['sizes'][size]
-            best = None
-            for c, rot, wl, t in U.wall_spots(room, w, d, gap=0.10, step=0.1):
-                a, b, u, n, L, hole = wl
-                # the balustrade: no door on this edge
-                if any(abs((dc[0] - a[0]) * n[0] + (dc[1] - a[1]) * n[1]) < 0.35 for dc in doors):
-                    continue
-                # the first at the far end from the doors, the next ones spread out
-                sc = -L - (min(dist(c, dc) for dc in doors) * 0.3 if doors else 0.0)
-                if planters:
-                    near = min(dist(c, q) for q in planters)
-                    if near < 1.6:
-                        continue
-                    sc = -L - min(near, 3.5)
-                if best is not None and sc >= best[0]:
-                    continue
-                if not room.contains(c, w, d, rot, back=0.0):
-                    continue
-                sp = rect(c, w, d, rot)
-                if not U.clear([sp], z, z + 0.9):
-                    continue
-                if not U.reach_ok(room, sp):
-                    continue
-                best = (sc, c, rot, sp)
-            if best:
-                sc, c, rot, sp = best
-                if U.reach_ok(room, sp):
-                    if U.add(room, 'planter_balcony', w, d, c, rot, z, z + 0.9, dict(extra), (seed + k) % 3, sp, sp, z):
-                        planters.append(c)
-                        break
-    # pots: a pair on a short wall, else a tree in a corner
-    kind = pick(U.num, 'pots' + room.id, ('plant_loggia_pair', 'plant_loggia_pair', 'plant_olive'))
-    if kind == 'plant_loggia_pair':
-        for size in ('M', 'S'):
-            w, d, extra = LF.KIT[kind].KINDS[kind]['sizes'][size]
-            ok = False
-            for c, rot, wl, t in sorted(U.wall_spots(room, w, d, gap=0.10, step=0.1), key=lambda s: s[2][4]):
-                if not room.contains(c, w, d, rot, back=0.0):
-                    continue
-                yy = max(d / 2 + 0.04, min(w / 4, w / 2 - d / 2))
-                pots = [rect(loc2plan(c, rot, 0.0, s * yy), d, d, rot) for s in (1, -1)]
-                h = extra.get('pot_h', 0.55) + extra.get('plant_h', 0.9)
-                if not U.clear(pots, z, z + h):
-                    continue
-                sp = rect(c, w, d, rot)
-                if not U.reach_ok(room, sp):
-                    continue
-                U.add(room, kind, w, d, c, rot, z, z + h, dict(extra, species=seed % 2), seed, sp, sp, z)
-                ok = True
-                break
-            if ok:
-                return
-        kind = 'plant_olive'
-    plant_try(U, room, (kind, 'plant_snake'), lambda r: U.corner_spots(room, r),
-              lambda c: min([dist(c, dc) for dc in doors] + [9]) * -1, sizes=('M', 'S'), salt='logtree', z=z)
-
-
-def living(U, room):
-    sofas = U.pieces_in(room.id, 'sofa')
-    tvs = U.pieces_in(room.id, 'tv')
-    for tv in tvs:
-        tv_console(U, room, tv)
-    curtains(U, room)
-    sofa = max(sofas, key=lambda p: p['box']['size'][0]) if sofas else None
-    if sofa:
-        rug_under_sofa(U, room, sofa)
-    dining(U, room)
-    herbs_on_run(U, room)
-    fridge(U, room)
-    tables = U.pieces_in(room.id, 'table_round')
-    if sofa:
-        armchair(U, room, sofa)
-    sideboard(U, room, near=tables[0]['at'] if tables else None)
-    # the big plant, by a window, away from the kitchen
-    kinds = list(BIG_PLANTS)
-    k0 = seed_of(U.num, 'big') % len(kinds)
-    kinds = kinds[k0:] + kinds[:k0]
-    plant_try(U, room, kinds[:2], lambda r: spots_free(U, room, r),
-              lambda c: near_window_score(U, room, c), salt='big')
-    if sofa:
-        floor_lamp(U, room, sofa)
-        wall_art(U, room, over=sofa, w=min(1.0, round(sofa['box']['size'][0] * 0.45, 1)), cz=1.5, salt='art_sofa')
-    # a second, smaller floor plant: by the TV, else anywhere free
-    tgt = tvs[0]['at'] if tvs else (sofa['at'] if sofa else None)
-    plant_try(U, room, ('plant_snake', 'plant_rubber') if seed_of(U.num, 'p2') % 2 else ('plant_rubber', 'plant_snake'),
-              lambda r: spots_free(U, room, r),
-              lambda c: (dist(c, tgt) if tgt else 0) + near_window_score(U, room, c) * 0.2, sizes=('M', 'S'), salt='p2')
-    # the trailing plant on a shelf, near the dining table or the TV
-    pothos(U, room, prefer=tables[0]['at'] if tables else tgt)
-
-
-def bedroom(U, room):
-    beds = U.pieces_in(room.id, 'bed_double')
-    curtains(U, room)
-    for bed in beds:
-        rug_bed(U, room, bed)
-    wardrobe(U, room)
-    kinds = ('plant_fiddle', 'plant_rubber', 'plant_snake', 'plant_monstera')
-    k0 = seed_of(U.num, 'bedplant', room.id) % len(kinds)
-    kinds = kinds[k0:] + kinds[:k0]
-    plant_try(U, room, kinds[:2] + ('plant_snake',), lambda r: spots_free(U, room, r),
-              lambda c: near_window_score(U, room, c), sizes=('M', 'S'), salt='bed' + room.id)
-    for bed in beds[:1]:
-        wall_art(U, room, over=bed, w=min(1.0, round(bed['box']['size'][0] * 0.5, 1)), cz=1.62, salt='art_bed')
 
 
 def office(U, room):
@@ -1308,15 +1503,10 @@ def office(U, room):
     pothos(U, room)
 
 
-def hall(U, room):
-    if room.area < 4.0:
-        return
-    plant_try(U, room, ('plant_snake', 'plant_rubber'), lambda r: U.corner_spots(room, r),
-              lambda c: 0.0, sizes=('L', 'M', 'S'), salt='hall')
-
 
 def dress_unit(level, num, rec, is_office, pieces, meta, ceiling):
     U = Unit(level, num, rec, is_office, pieces, meta, ceiling)
+    restyle_kitchen(U)
     washer = [not is_office]
     # bathrooms: the biggest first (it gets the washing machine)
     order = sorted(U.rooms.values(), key=lambda r: (r.kind not in LIVING, r.kind not in BATH, -r.area))
@@ -1326,7 +1516,7 @@ def dress_unit(level, num, rec, is_office, pieces, meta, ceiling):
             living(U, room)
             if k == 'studio':
                 for bed in U.pieces_in(room.id, 'bed_double'):
-                    rug_bed(U, room, bed)
+                    dress_bed(U, bed)
         elif k == 'bedroom':
             bedroom(U, room)
         elif k in BATH:
@@ -1341,4 +1531,4 @@ def dress_unit(level, num, rec, is_office, pieces, meta, ceiling):
         p.pop('_bounds', None)
     for p in pieces:
         p.pop('_bounds', None)
-    return pieces + U.added
+    return [p for p in pieces if p['node'] not in U.removed] + U.added

@@ -661,49 +661,11 @@ def upholstered(kit, w, d, seed, seat_h=0.45, arm_w=0.16, arm_h=0.62, back_h=0.7
 
 
 # ====================================================================== kinds
-def b_sofa(kit, w, d, seed, P):
-    upholstered(kit, w, d, seed, seat_h=P['seat_h'], arm_w=P['arm_w'], n_cush=int(P['cushions']),
-                scatter=int(P['scatter']), throw=int(P['throw']), fabric=int(P['fabric']))
-
 
 def b_armchair(kit, w, d, seed, P):
     upholstered(kit, w, d, seed, seat_h=P['seat_h'], arm_w=P['arm_w'], arm_h=0.60, back_h=0.74, n_cush=1,
                 scatter=int(P['scatter']), throw=0, fabric=int(P['fabric']), back_cush_h=0.42, armchair=True)
 
-
-def b_table_coffee(kit, w, d, seed, P):
-    rnd = random.Random(seed * 31 + 5)
-    H = P['h']
-    x0, x1, y0, y1 = -d / 2, d / 2, -w / 2, w / 2
-    rc = min(0.09, d * 0.18)
-    top = lambda ins: rrect2(d - 2 * ins, w - 2 * ins, rc - ins, 4)
-    side, caps = slab(top, H - 0.032, H, 0.010, 1)
-    kit.add('int_coffee_top', side, True)
-    kit.add('int_coffee_top', caps, False)
-    # apron-less: four walnut legs, round, tapered, splayed outward, and a
-    # walnut magazine shelf low down
-    WOOD = 'int_wood_walnut'
-    ix, iy = d / 2 - 0.07, w / 2 - 0.08
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            side, caps = taper_leg(sx * (ix + 0.012), sy * (iy + 0.012), 0.0, H - 0.031, 0.013, 0.019, 8,
-                                   lean=(-sx * 0.012, -sy * 0.012))
-            kit.add(WOOD, side, True)
-            kit.add(WOOD, caps, False)
-    sh = lambda ins: rrect2(d - 0.12 - 2 * ins, w - 0.14 - 2 * ins, 0.03 - ins, 2)
-    side, caps = slab(sh, 0.115, 0.135, 0.005, 1)
-    kit.add(WOOD, side, True)
-    kit.add(WOOD, caps, False)
-    if P['decor']:
-        # a stack of two books, a ceramic bowl, a small vase; on the shelf two more books
-        bx = -d * 0.08
-        by = w * 0.22 * (1 if rnd.random() < 0.5 else -1)
-        c1, c2, c3 = rnd.sample(COVERS[:7], 3)
-        lying_book(kit, bx, by, H, 0.22, 0.30, 0.028, c1, math.radians(rnd.uniform(-12, -4)))
-        lying_book(kit, bx, by, H + 0.028, 0.18, 0.24, 0.022, c2, math.radians(rnd.uniform(6, 16)))
-        vase(kit, bx + 0.02, by + 0.02 * (1 if by < 0 else -1), H + 0.050, 0.16, 0.040, 'int_ceramic', 12, 0)
-        bowl(kit, d * 0.10, -by * 0.85, H, 0.13, 0.065, 'int_stone_dark', 18)
-        lying_book(kit, 0.0, -by * 0.6, 0.135, 0.24, 0.32, 0.03, c3, math.radians(rnd.uniform(-8, 8)))
 
 
 def cabinet(kit, w, d, H, leg_h, seed, doors=None, body='int_wood_walnut', front='int_wood_oak',
@@ -742,50 +704,6 @@ def cabinet(kit, w, d, H, leg_h, seed, doors=None, body='int_wood_walnut', front
             kit.add('int_wood_walnut' if body != 'int_wood_walnut' else 'int_wood_oak', caps, False)
     return bx0, bx1
 
-
-def b_tv(kit, w, d, seed, P):
-    rnd = random.Random(seed * 101 + 3)
-    cw = P['console_w'] or max(1.40, min(2.2, w + 0.70))
-    cd = P['console_d']
-    ch = P['console_h']
-    bx0 = -d / 2
-    cabinet(kit, cw, cd, ch, 0.14, seed, doors=None, back_x=bx0)
-    # ---- the screen: a slim panel on a centre pedestal, w wide (16:9)
-    sw = w
-    sh = w * 0.5625
-    tx = bx0 + 0.10
-    zs0 = ch + 0.075
-    # panel body (the bezel shows as a 6 mm black frame round the glass)
-    kit.add('metal_dark', rbox((tx, 0, zs0 + sh / 2), (0.022, sw, sh), (0.004, 0.006, 0.006), 1, 1), False)
-    # the glass: a black gloss sheet 1 mm proud of the bezel, set in 6 mm
-    kit.add('int_black', box((tx + 0.011, -sw / 2 + 0.006, zs0 + 0.012), (tx + 0.012, sw / 2 - 0.006, zs0 + sh - 0.006),
-                             skip=('-x', '-y', '+y', '-z', '+z')), False)
-    # the electronics hump at the back
-    kit.add('metal_dark', box((tx - 0.037, -sw * 0.31, zs0 + sh * 0.17), (tx - 0.011, sw * 0.31, zs0 + sh * 0.67),
-                              skip=('+x',)), False)
-    # pedestal: a short neck and an oval-ish foot plate
-    kit.add('metal_dark', box((tx - 0.015, -0.03, ch), (tx + 0.005, 0.03, zs0 + 0.05)), False)
-    side, caps = slab(lambda ins: rrect2(0.18 - 2 * ins, 0.30 - 2 * ins, 0.06 - ins, 4, tx + 0.01, 0), ch, ch + 0.010,
-                      0.003, 1)
-    kit.add('metal_dark', side, True)
-    kit.add('metal_dark', caps, False)
-    # ---- a soundbar in front of the foot
-    sbw = min(cw - 0.2, max(0.6, sw * 0.85))
-    sbx = bx0 + 0.26
-    kit.add('int_fabric_dark', rbox((sbx, 0, ch + 0.036), (0.085, sbw, 0.062), (0.03, 0.03, 0.028), (1, 1, 1), (1, 1, 1),
-                                    skip=('-z',)), True)
-    kit.add('metal_dark', box((sbx - 0.03, -sbw / 2 + 0.03, ch), (sbx + 0.03, sbw / 2 - 0.03, ch + 0.007), skip=('-z',)),
-            False)
-    # ---- decor: a vase at one end, books with a bowl on them at the other
-    if P['decor']:
-        s = 1 if rnd.random() < 0.5 else -1
-        ey = s * (cw / 2 - 0.16)
-        vase(kit, bx0 + cd * 0.5, ey, ch, 0.30, 0.065, 'int_ceramic', 14, 0)
-        c1, c2 = rnd.sample(COVERS[:7], 2)
-        oy = -s * (cw / 2 - 0.19)
-        lying_book(kit, bx0 + cd * 0.52, oy, ch, 0.24, 0.18, 0.03, c1, 0.08)
-        lying_book(kit, bx0 + cd * 0.52, oy, ch + 0.03, 0.20, 0.15, 0.022, c2, -0.1)
-        candle_box(kit, bx0 + cd * 0.52 + 0.02, oy + 0.01, ch + 0.052, 0.06, 'int_stone_dark')
 
 
 def b_sideboard(kit, w, d, seed, P):
@@ -842,113 +760,6 @@ def shade_drum(kit, x, y, z0, r0, r1, h, seg):
     kit.add('int_lamp_shade', m, False)
 
 
-def b_table_round(kit, w, d, seed, P):
-    D = P.get('dia') or max(w, d)
-    R = D / 2
-    H = 0.75
-    seg = 48 if D >= 1.0 else 40
-    top = lambda ins: circle2(R - ins, seg)
-    side, caps = slab(top, H - 0.024, H, 0.008, 1)
-    kit.add('int_marble', side, True)
-    kit.add('int_marble', caps, False)
-    WOOD = 'int_wood_oak'
-    if int(P['legs']) == 0:
-        # a turned oak pedestal: a flared foot, a waisted column, a spreader
-        rb = min(0.26, R * 0.62)
-        prof = [(0, 0), (rb, 0), (rb, 0.012), (rb * 0.80, 0.030), (rb * 0.42, 0.075), (0.075, 0.16),
-                (0.058, 0.32), (0.055, 0.50), (0.07, 0.62), (0.13, 0.69), (0.15, 0.70), (0.15, H - 0.024), (0, H - 0.024)]
-        for mesh, sm in lathe(prof, 22, split=(1, 2, 11, 12)):
-            kit.add(WOOD, mesh, sm)
-    else:
-        # four turned legs under an apron ring
-        ra = R * 0.62
-        for k in range(4):
-            a = TAU * (k + 0.5) / 4
-            lx, ly = ra * math.cos(a), ra * math.sin(a)
-            prof = [(0, 0), (0.016, 0), (0.019, 0.05), (0.024, 0.40), (0.026, 0.60), (0.024, H - 0.09),
-                    (0.024, H - 0.024), (0, H - 0.024)]
-            for mesh, sm in lathe(prof, 10, lx, ly, split=(1, 6)):
-                kit.add(WOOD, mesh, sm)
-        apr = [(0, H - 0.10), (ra + 0.03, H - 0.10), (ra + 0.03, H - 0.024), (0, H - 0.024)]
-        for mesh, sm in lathe(apr, 28, split=(1, 2)):
-            kit.add(WOOD, mesh, sm)
-
-
-def b_chair(kit, w, d, seed, P):
-    """A dining chair: four tapered oak legs, the back pair rising into posts
-    that carry a curved bentwood back rail, a padded seat on an oak shell.
-    Faces +X (towards the table); back at -X."""
-    rnd = random.Random(seed)
-    SW = max(0.40, min(0.48, w + 0.04))          # seat width across
-    SD = max(0.40, min(0.46, d - 0.03))          # seat depth
-    SH = P['seat_h']
-    WOOD = 'int_wood_oak'
-    FAB = FABRICS[int(P['fabric']) % len(FABRICS)]
-    fx = SD / 2
-    bxp = -SD / 2
-    cx = 0.015                                   # the seat sits a little forward of the box centre
-    # ---- seat shell: a thin oak tray with rounded corners, front edge rolled
-    sz0 = SH - 0.055
-    shell = lambda ins: rrect2(SD - 2 * ins, SW - 2 * ins, 0.06 - ins, 3, cx, 0)
-    side, caps = slab(shell, sz0, sz0 + 0.022, 0.008, 1)
-    kit.add(WOOD, side, True)
-    kit.add(WOOD, caps, False)
-    # ---- the pad: a soft cushion, slightly dished (front higher, saddle)
-    pad = rbox((cx, 0, 0), (SD - 0.025, SW - 0.025, 0.034), (0.03, 0.05, 0.016), (1, 1, 1), (2, 2, 1),
-               bulge=(0, 0, 0.010), skip=('-z',))
-    pad = tf(pad, lambda v: (v[0], v[1], v[2] + 0.006 * ((v[0] - cx) / (SD / 2)) ** 2
-                              - 0.004 * (1 - abs(v[1]) / (SW / 2))))
-    kit.add(FAB, mv(pad, 0, 0, sz0 + 0.022 + 0.017), True)
-    # ---- legs
-    lz1 = sz0 + 0.002
-    for sy in (-1, 1):
-        ly = sy * (SW / 2 - 0.035)
-        # front legs: straight taper, a touch splayed
-        side, caps = taper_leg(cx + fx - 0.03 + 0.012, ly + sy * 0.010, 0.0, lz1, 0.012, 0.016, 6,
-                               lean=(-0.012, -sy * 0.010))
-        kit.add(WOOD, side, True)
-        kit.add(WOOD, caps, False)
-        # back legs: one continuous post, foot kicked back, rising through
-        # the seat to the back rail, raked ~10 degrees
-        p_foot = (cx + bxp + 0.005, ly + sy * 0.006, 0.0)
-        p_seat = (cx + bxp + 0.035, ly, sz0 + 0.01)
-        p_top = (cx + bxp + 0.000, ly * 0.97, 0.80)
-        path = [p_foot, p_seat, ((p_seat[0] + p_top[0]) / 2 + 0.004, ly * 0.985, (p_seat[2] + p_top[2]) / 2), p_top]
-        rings = []
-        for i, p in enumerate(path):
-            r = [0.012, 0.016, 0.0145, 0.012][i]
-            rings.append([(p[0] + a, p[1] + b, p[2]) for a, b in circle2(r, 6, math.pi / 6)])
-        side, caps = loft(rings)
-        kit.add(WOOD, side, True)
-        kit.add(WOOD, caps, False)
-    # ---- the back rail: bent plywood, an arc in plan round the sitter
-    Rb = 0.42
-    span = SW / 2 + 0.01
-    th0 = math.asin(min(0.95, span / Rb))
-    arc = []
-    nA = 9
-    for i in range(nA):
-        t = -th0 + 2 * th0 * i / (nA - 1)
-        arc.append((cx + bxp - 0.012 + Rb - Rb * math.cos(t) - 0.0, Rb * math.sin(t)))
-    zr0, zr1 = 0.64, 0.80
-    rail_prof = rrect2(0.016, zr1 - zr0, 0.007, 1)      # (thickness, height) section
-    # build rings: for each arc point, the section in (normal, z)
-    rings = []
-    for i, (ax, ay) in enumerate(arc):
-        a = arc[max(0, i - 1)]
-        b = arc[min(nA - 1, i + 1)]
-        tx, ty = b[0] - a[0], b[1] - a[1]
-        tl = math.hypot(tx, ty) or 1
-        nx, ny = ty / tl, -tx / tl
-        ring = []
-        for u, v in rail_prof:
-            zz = (zr0 + zr1) / 2 + v
-            rake = -(zz - 0.45) * math.tan(math.radians(10))     # the back leans back with the posts
-            ring.append((ax + nx * u + rake, ay + ny * u, zz))
-        rings.append(ring)
-    side, caps = loft(rings)
-    kit.add(WOOD, side, True)
-    kit.add(WOOD, caps, False)
 
 
 def b_rug(kit, w, d, seed, P):
@@ -1140,174 +951,680 @@ def b_bookshelf(kit, w, d, seed, P):
                 last = 'gap'
 
 
+
+
+# ====================================================================== the owner's renders (Nov 2026)
+# The pieces below follow the ten renders the owner sent on 2026-11-26: a
+# white boucle modular sofa and loveseat, a round dark coffee table, a
+# rectangular walnut dining table with curved greige chairs, tall walnut
+# kitchen columns with lit shelves, an island with a gas hob and a steel
+# cylinder hood, a hall wardrobe wall, a TV wall, neutral art, sheers.
+# Every material is a name web/materials.js already had (int_mint now
+# carries the matt greige of the fronts): no new shader on a first visit.
+FAB_W = 'int_fabric_white'      # boucle
+FAB_G = 'int_fabric_sofa'       # greige
+WALNUT = 'int_wood_walnut'
+GREIGE = 'int_mint'
+LED = 'int_lamp_shade'
+
+
+def stroke(kit, mat, pts, width, xx):
+    """A flat line of `width` through (y, z) points on the plane x = xx,
+    facing +X (a brush stroke on a canvas, a groove on a door)."""
+    V, F = [], []
+    n = len(pts)
+    for i, (y, z) in enumerate(pts):
+        a = pts[max(0, i - 1)]
+        b = pts[min(n - 1, i + 1)]
+        ty, tz = b[0] - a[0], b[1] - a[1]
+        L = math.hypot(ty, tz) or 1.0
+        ny, nz = -tz / L * width / 2, ty / L * width / 2
+        V.append((xx, y - ny, z - nz))
+        V.append((xx, y + ny, z + nz))
+    for i in range(n - 1):
+        q = (2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1)
+        F.append(q)
+    m = (V, F)
+    a, b, c = V[F[0][0]], V[F[0][1]], V[F[0][2]]
+    if _cross(_v_sub(b, a), _v_sub(c, b))[0] < 0:
+        m = flip(m)
+    kit.add(mat, m, False)
+
+
+def b_sofa(kit, w, d, seed, P):
+    """A modular boucle sofa (renders 4, 5, 13): no legs, a low plinth, deep
+    soft seat blocks, plump back cushions and rounded bolster arms, all
+    int_fabric_white; two scatter cushions and a greige throw. chaise = +1 /
+    -1 pulls the seat block at that end (+Y / -Y) forward to chaise_len from
+    the back (an L), with no arm at that end."""
+    rnd = random.Random(seed * 7919 + 29)
+    ch = int(round(P['chaise']))
+    clen = max(d, P['chaise_len'])
+    x0, x1 = -d / 2.0, d / 2.0
+    hw = w / 2.0
+    aw = 0.20
+    arm_n = 0.0 if ch == -1 else aw          # the arm at -Y
+    arm_p = 0.0 if ch == 1 else aw           # the arm at +Y
+    sh = P['seat_h']
+    pz = 0.12                                # plinth top
+    bt = 0.24                                # back cushion depth
+    bh = 0.74                                # back top
+    ah = 0.58                                # arm top
+    yA, yB = -hw + arm_n, hw - arm_p
+    span = yB - yA
+    n = 1 if span < 0.95 else (2 if span < 1.85 else 3)
+    mw = span / n
+    # the plinth, 2.5 cm in from the cushions all round
+    kit.add(FAB_W, rbox((0.0, 0.0, pz / 2 + 0.006), (d - 0.05, w - 0.05, pz - 0.012), 0.025, 1, 1, skip=('-z',)), True)
+    ich = (n - 1) if ch > 0 else 0
+    if ch:
+        cy = yA + mw * (ich + 0.5)
+        ex0, ex1 = x1 - 0.06, x0 + clen - 0.025
+        kit.add(FAB_W, rbox(((ex0 + ex1) / 2, cy, pz / 2 + 0.006), (ex1 - ex0, mw - 0.05, pz - 0.012), 0.025, 1, 1,
+                            skip=('-z',)), True)
+    for i in range(n):
+        cy = yA + mw * (i + 0.5)
+        sx0 = x0 + bt - 0.04
+        sx1 = (x0 + clen) if (ch and i == ich) else x1
+        kit.add(FAB_W, rbox(((sx0 + sx1) / 2, cy, (pz + sh) / 2 - 0.003), (sx1 - sx0, mw - 0.01, sh - pz + 0.006),
+                            (0.09, 0.08, 0.08), (2, 1, 2), 1, bulge=(0.004, 0.008, 0.016), skip=('-z',)), True)
+        kit.add(FAB_W, rbox((x0 + bt / 2, cy, (pz + bh) / 2), (bt, mw - 0.008, bh - pz),
+                            (0.10, 0.08, 0.11), (2, 1, 2), 1, bulge=(0.02, 0.0, 0.008), skip=('-z',)), True)
+    for s, a in ((-1, arm_n), (1, arm_p)):
+        if a:
+            kit.add(FAB_W, rbox((0.0, s * (hw - aw / 2), (pz + ah) / 2 - 0.003), (d, aw, ah - pz + 0.006),
+                                (0.10, 0.09, 0.10), (2, 2, 2), 1, skip=('-z',)), True)
+    # scatter cushions at the ends of the back, one greige, one white (a
+    # third in the middle of a three-seat)
+    spots = [(yA + 0.30, FAB_G), (yB - 0.30, FAB_W)]
+    if n == 3:
+        spots.append((rnd.uniform(-0.1, 0.1), FAB_G))
+    for k, (yy, mat) in enumerate(spots):
+        ps = 0.44 if k < 2 else 0.38
+        yaw = (1 if yy < 0 else -1) * math.radians(rnd.uniform(8, 16))
+        c = (x0 + bt + 0.07, yy, sh + ps / 2 - 0.04)
+        kit.add(mat, pillow(c, ps, ps, 0.15, math.radians(18), math.radians(rnd.uniform(-6, 6)), yaw, n=4), True)
+    # a greige throw over the arm away from the chaise
+    s = (1 if ch <= 0 else -1) if ch else (1 if rnd.random() < 0.5 else -1)
+    if (arm_p if s > 0 else arm_n):
+        tx = x1 - 0.30
+        kit.add(FAB_G, rbox((tx, s * (hw - aw / 2), ah + 0.006), (0.46, aw + 0.03, 0.016), 0.006, 1, 1, skip=('-z',)), True)
+        kit.add(FAB_G, rbox((tx, s * (hw + 0.009), ah - 0.17), (0.46, 0.016, 0.36), 0.006, 1, 1), True)
+
+
+def b_loveseat(kit, w, d, seed, P):
+    """The sofa's two-seat partner (renders 4, 13): the same build, straight."""
+    Q = dict(P)
+    Q['chaise'] = 0
+    Q['chaise_len'] = 0.0
+    b_sofa(kit, w, d, seed + 3, Q)
+
+
+def b_pouf(kit, w, d, seed, P):
+    """A round boucle pouf, 0.38 high (under the walk's 0.4 m solid line)."""
+    R = min(w, d) / 2.0
+    H = P['h']
+    prof = [(0.0, 0.004), (R * 0.90, 0.004), (R * 0.985, 0.04), (R, H * 0.45), (R * 0.975, H - 0.05),
+            (R * 0.88, H - 0.012), (R * 0.45, H), (0.0, H + 0.004)]
+    for mesh, sm in lathe(prof, 22, split=(1,)):
+        kit.add(FAB_W, mesh, sm)
+
+
+def b_table_coffee(kit, w, d, seed, P):
+    """A round coffee table (renders 4, 5, 13): a navy lacquer disc on an
+    inset walnut drum, a walnut tray with a candle and a small vase. The
+    drawn box is the old rectangular table's; the disc is centred in it."""
+    rnd = random.Random(seed * 31 + 5)
+    H = P['h']
+    D = max(0.60, min(0.76, d + 0.12))
+    R = D / 2.0
+    side, caps = slab(lambda ins: circle2(R - ins, 36), H - 0.03, H, 0.008, 1)
+    kit.add('int_coffee_top', side, True)
+    kit.add('int_coffee_top', caps, False)
+    rd = R * 0.70
+    for mesh, sm in lathe([(0.0, 0.0), (rd, 0.0), (rd, H - 0.03), (0.0, H - 0.03)], 28, split=(1, 2)):
+        kit.add(WALNUT, mesh, sm)
+    if P['decor']:
+        a = rnd.uniform(0, TAU)
+        tx, ty = 0.10 * math.cos(a), 0.10 * math.sin(a)
+        side, caps = slab(lambda ins: circle2(0.14 - ins, 20), H, H + 0.014, 0.004, 1)
+        kit.add(WALNUT, mv(side, tx, ty), True)
+        kit.add(WALNUT, mv(caps, tx, ty), False)
+        for mesh, sm in lathe([(0.0, 0.0), (0.035, 0.0), (0.035, 0.085), (0.0, 0.085)], 10, tx - 0.04, ty, split=(1, 2)):
+            kit.add('int_ceramic', mv(mesh, 0, 0, H + 0.014), sm)
+        kit.add(LED, lathe([(0.0, 0.0861), (0.008, 0.0861), (0.008, 0.10), (0.0, 0.10)], 6, tx - 0.04, ty)[0][0], True)
+        vase(kit, tx + 0.05, ty + 0.03, H + 0.014, 0.15, 0.040, 'int_stone_dark', 12, 0)
+
+
+def b_table_round(kit, w, d, seed, P):
+    """The drawn round table where the room has no floor for the long one:
+    a walnut top on a turned walnut pedestal (renders' wood, the old form)."""
+    D = P.get('dia') or max(w, d)
+    R = D / 2
+    H = 0.75
+    seg = 40
+    side, caps = slab(lambda ins: circle2(R - ins, seg), H - 0.03, H, 0.008, 1)
+    kit.add(WALNUT, side, True)
+    kit.add(WALNUT, caps, False)
+    rb = min(0.26, R * 0.62)
+    prof = [(0, 0), (rb, 0), (rb, 0.012), (rb * 0.80, 0.030), (rb * 0.42, 0.075), (0.075, 0.16),
+            (0.058, 0.32), (0.055, 0.50), (0.07, 0.62), (0.13, 0.69), (0.15, 0.70), (0.15, H - 0.03), (0, H - 0.03)]
+    for mesh, sm in lathe(prof, 20, split=(1, 2, 11, 12)):
+        kit.add(WALNUT, mesh, sm)
+
+
+def b_table_dining(kit, w, d, seed, P):
+    """A rectangular walnut dining table (renders 4, 5, 7): w = its LENGTH
+    (local Y), d = its width (local X). A 30 mm top with soft corners, a
+    shallow apron, four tapered legs."""
+    H = 0.75
+    side, caps = slab(lambda ins: rrect2(d - 2 * ins, w - 2 * ins, 0.05 - ins, 3), H - 0.03, H, 0.008, 1)
+    kit.add(WALNUT, side, True)
+    kit.add(WALNUT, caps, False)
+    ax, ay = d / 2 - 0.08, w / 2 - 0.11
+    kit.add(WALNUT, box((-ax, -ay, H - 0.11), (ax, ay, H - 0.03), skip=('+z',)), False)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            side, caps = taper_leg(sx * (ax - 0.005), sy * (ay - 0.005), 0.0, H - 0.10, 0.016, 0.026, 8,
+                                   lean=(-sx * 0.01, -sy * 0.01))
+            kit.add(WALNUT, side, True)
+            kit.add(WALNUT, caps, False)
+
+
+def b_chair(kit, w, d, seed, P):
+    """A barrel-back dining chair (renders 4, 5): a greige upholstered tub
+    shell curving ~200 degrees round the seat, its arms falling to the
+    front; a loose round seat; four thin splayed walnut legs. Faces +X
+    (toward its table). The kit ignores w, d: the seat is 0.50 wide."""
+    SH = P['seat_h']
+    R = 0.25
+    t = 0.05
+    zb = SH - 0.11
+    ztop = 0.79
+    nA = 13
+    rings = []
+    for i in range(nA):
+        a = math.radians(-100.0 + 200.0 * i / (nA - 1))
+        ux, uy = -math.cos(a), math.sin(a)
+        f = abs(a) / math.radians(100.0)
+        zt = ztop - 0.20 * f ** 1.5
+        sec = [(R - t, zb), (R, zb), (R, zt - 0.025), (R - 0.012, zt), (R - t + 0.012, zt), (R - t, zt - 0.025)]
+        rings.append([(ux * r, uy * r, z) for r, z in sec])
+    side, caps = loft(rings)
+    kit.add(FAB_G, side, True)
+    kit.add(FAB_G, caps, False)
+    prof = [(0.0, zb - 0.045), (R - 0.03, zb - 0.045), (R - 0.008, zb - 0.015), (R - 0.008, SH - 0.03),
+            (R - 0.035, SH), (0.0, SH + 0.006)]
+    for mesh, sm in lathe(prof, 20, split=(1,)):
+        kit.add(FAB_G, mesh, sm)
+    for k in range(4):
+        a = math.radians(45 + 90 * k)
+        lx, ly = 0.16 * math.cos(a), 0.16 * math.sin(a)
+        ox, oy = 0.035 * math.cos(a), 0.035 * math.sin(a)
+        side, caps = taper_leg(lx + ox, ly + oy, 0.0, zb - 0.04, 0.010, 0.015, 6, lean=(-ox, -oy))
+        kit.add(WALNUT, side, True)
+        kit.add(WALNUT, caps, False)
+
+
+def b_tall_walnut(kit, w, d, seed, P):
+    """A tall walnut kitchen column, floor to ceiling (all the renders): an
+    appliance bay (app 1 = a black glass fridge, 2 = two black ovens, 0 =
+    none) beside an open niche of walnut shelves lit by warm LED strips.
+    hand = the side (+1 = +Y) the appliance bay takes. Back at -X on the
+    wall, fronts at +X like kitchen_run's."""
+    rnd = random.Random(seed * 41 + 3)
+    H = P['h']
+    app = int(round(P['app']))
+    hand = 1 if P['hand'] >= 0 else -1
+    x0, x1 = -d / 2.0, d / 2.0
+    t = 0.019
+    PL = 0.12
+    fx = x1 - 0.004
+    aw = 0.0 if app == 0 else min(w, 0.62)
+    nw = w - aw
+    if nw < 0.25:
+        aw, nw = w, 0.0
+    if hand > 0:
+        ya, yn = (w / 2 - aw, w / 2), (-w / 2, -w / 2 + nw)
+    else:
+        ya, yn = (-w / 2, -w / 2 + aw), (w / 2 - nw, w / 2)
+    # carcass: the two outer sides, the top, a black plinth recess
+    kit.add(WALNUT, box((x0, -w / 2, 0.0), (fx, -w / 2 + t, H), skip=('-x',)), False)
+    kit.add(WALNUT, box((x0, w / 2 - t, 0.0), (fx, w / 2, H), skip=('-x',)), False)
+    kit.add(WALNUT, box((x0, -w / 2 + t, H - t), (fx, w / 2 - t, H), skip=('-x', '-y', '+y')), False)
+    kit.add('int_black', box((x0 + 0.02, -w / 2 + t, 0.0), (fx - 0.06, w / 2 - t, PL), skip=('-z', '-x', '-y', '+y')), False)
+    if nw and aw:
+        yd = yn[1] if hand > 0 else yn[0]
+        kit.add(WALNUT, box((x0, yd - t / 2, PL), (fx, yd + t / 2, H - t), skip=('-x',)), False)
+
+    def inner(r, outer_lo, outer_hi):
+        return (r[0] + (t if outer_lo else t / 2), r[1] - (t if outer_hi else t / 2))
+    if nw:
+        a, b = inner(yn, yn[0] <= -w / 2 + 1e-6, yn[1] >= w / 2 - 1e-6)
+        kit.add(WALNUT, box((x0, a, PL), (x0 + 0.012, b, H - t), skip=('-x', '-y', '+y')), False)
+        ns = 6
+        zs = [PL + (H - t - PL) * k / ns for k in range(ns)]
+        for k, z in enumerate(zs):
+            kit.add(WALNUT, box((x0 + 0.012, a, z), (fx - 0.012, b, z + 0.018), skip=('-x', '-y', '+y')), False)
+            if k:
+                kit.add(LED, box((fx - 0.06, a + 0.01, z - 0.005), (fx - 0.045, b - 0.01, z), skip=('+z',)), False)
+        # the warm strip up the inside of the niche's front edge
+        ys = a if hand > 0 else b - 0.008
+        kit.add(LED, box((fx - 0.035, ys, PL + 0.02), (fx - 0.025, ys + 0.008, H - t - 0.02),
+                         skip=('-y',) if hand > 0 else ('+y',)), False)
+        # a little on the shelves: a vase, a bowl, a stack of books
+        if len(zs) > 3:
+            z2, z3, z4 = zs[2] + 0.018, zs[3] + 0.018, zs[4] + 0.018
+            ym = (a + b) / 2
+            vase(kit, x0 + 0.30, ym, z3, 0.22, 0.05, 'int_ceramic', 12, 0)
+            bowl(kit, x0 + 0.30, ym, z2, 0.10, 0.06, 'int_stone_dark', 12)
+            lying_book(kit, x0 + 0.28, ym, z4, 0.24, min(0.18, b - a - 0.04), 0.03, FAB_G, 0.1)
+    if aw:
+        a, b = inner(ya, ya[0] <= -w / 2 + 1e-6, ya[1] >= w / 2 - 1e-6)
+        a, b = a + 0.002, b - 0.002
+        yc = (a + b) / 2
+        py = (a + 0.045) if hand > 0 else (b - 0.045)       # the pulls by the niche
+        if app == 1:
+            zf = PL + 1.86
+            kit.add('int_black', box((fx - 0.02, a, PL + 0.002), (fx, b, zf), skip=('-x',)), False)
+            kit.add('metal_dark', box((fx, a + 0.01, PL + 0.70), (fx + 0.0015, b - 0.01, PL + 0.706), skip=('-x',)), False)
+            for z0, z1 in ((PL + 0.30, PL + 0.62), (PL + 0.82, PL + 1.50)):
+                kit.add('metal_dark', box((fx, py - 0.008, z0), (fx + 0.022, py + 0.008, z1), skip=('-x',)), False)
+            kit.add(LED, box((fx, yc - 0.045, PL + 1.30), (fx + 0.0015, yc + 0.045, PL + 1.39), skip=('-x',)), False)
+            kit.add(WALNUT, box((fx - 0.02, a, zf + 0.004), (fx, b, H - t - 0.002), skip=('-x',)), False)
+        elif app == 2:
+            for z0, z1 in ((0.80, 1.40), (1.42, 1.86)):
+                kit.add('int_black', box((fx - 0.02, a, z0), (fx, b, z1), skip=('-x',)), False)
+                kit.add('metal_dark', box((fx, a + 0.06, z1 - 0.075), (fx + 0.026, b - 0.06, z1 - 0.06), skip=('-x',)), False)
+                kit.add('metal_dark', box((fx, a + 0.02, z1 - 0.042), (fx + 0.0015, b - 0.02, z1 - 0.012), skip=('-x',)), False)
+            kit.add(WALNUT, box((fx - 0.02, a, PL + 0.002), (fx, b, 0.797), skip=('-x',)), False)
+            kit.add(WALNUT, box((fx - 0.02, a, 1.863), (fx, b, H - t - 0.002), skip=('-x',)), False)
+        else:
+            kit.add(WALNUT, box((fx - 0.02, a, PL + 0.002), (fx, b, H - t - 0.002), skip=('-x',)), False)
+
+
+def corrugate(kit, mat, s, x, ya, yb, z0, z1, pitch=0.04, depth=0.008, seg=3):
+    """Vertical reeding on the plane x (facing s*X): half-round flutes of
+    `pitch` from ya to yb, z0..z1."""
+    n = max(1, int(round((yb - ya) / pitch)))
+    p = (yb - ya) / n
+    ys = []
+    for i in range(n):
+        for k in range(seg):
+            u = k / float(seg)
+            ys.append((ya + p * (i + u), depth * math.sin(math.pi * u)))
+    ys.append((yb, 0.0))
+    V = []
+    for (y, o) in ys:
+        V.append((x + s * o, y, z0))
+        V.append((x + s * o, y, z1))
+    F = [(2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1) for i in range(len(ys) - 1)]
+    m = (V, F)
+    a, b, c = V[F[0][0]], V[F[0][1]], V[F[0][2]]
+    if _cross(_v_sub(b, a), _v_sub(c, b))[0] * s < 0:
+        m = flip(m)
+    kit.add(mat, m, True)
+
+
+def b_kitchen_island(kit, w, d, seed, P):
+    """A kitchen island (renders 5, 6, 7, 9, 11, 12, 13): w = its length
+    (local Y), d = its depth (local X). A reeded greige body on a black
+    plinth, a 40 mm marble top 20 mm proud, a black glass gas hob with five
+    burners, a wine cooler in the +X face at the +Y end (w >= 1.8), and a
+    stainless cylinder hood from 1.6 m to the ceiling over the hob."""
+    rnd = random.Random(seed * 61 + 7)
+    H, TT, OV = 0.90, 0.04, 0.02
+    bx, by = d / 2 - OV, w / 2 - OV
+    zt0 = H - TT
+    PL = 0.08
+    kit.add('int_black', box((-bx + 0.05, -by + 0.05, 0.0), (bx - 0.05, by - 0.05, PL), skip=('-z', '+z')), False)
+    kit.add(GREIGE, box((-bx, -by, PL), (bx, by, zt0), skip=('-z', '+z', '-x', '+x')), False)
+    cool = w >= 1.8
+    yc0 = by - 0.62
+    corrugate(kit, GREIGE, -1, -bx, -by, by, PL, zt0)
+    corrugate(kit, GREIGE, 1, bx, -by, yc0 if cool else by, PL, zt0)
+    if cool:
+        # the cooler: a black frame, a lit recess with three rows of bottle
+        # ends, a glass door over it
+        fy0, fy1 = yc0, by
+        kit.add('int_black', box((bx - 0.02, fy0, PL), (bx, fy0 + 0.04, zt0), skip=('-x',)), False)
+        kit.add('int_black', box((bx - 0.02, fy1 - 0.04, PL), (bx, fy1, zt0), skip=('-x',)), False)
+        kit.add('int_black', box((bx - 0.02, fy0 + 0.04, PL), (bx, fy1 - 0.04, PL + 0.06), skip=('-x',)), False)
+        kit.add('int_black', box((bx - 0.02, fy0 + 0.04, zt0 - 0.06), (bx, fy1 - 0.04, zt0), skip=('-x',)), False)
+        ry0, ry1, rz0, rz1 = fy0 + 0.04, fy1 - 0.04, PL + 0.06, zt0 - 0.06
+        kit.add('int_black', flip(box((bx - 0.30, ry0, rz0), (bx - 0.02, ry1, rz1), skip=('+x', '-x'))), False)
+        kit.add(LED, ([(bx - 0.299, ry0, rz0), (bx - 0.299, ry1, rz0), (bx - 0.299, ry1, rz1), (bx - 0.299, ry0, rz1)],
+                      [(0, 1, 2, 3)]), False)
+        nb = max(3, int((ry1 - ry0) / 0.10))
+        for row in range(3):
+            zc = rz0 + (rz1 - rz0) * (row + 0.5) / 3
+            kit.add('metal_dark', box((bx - 0.29, ry0, zc - 0.045), (bx - 0.03, ry1, zc - 0.040), skip=('-z',)), False)
+            for k in range(nb):
+                yy = ry0 + (ry1 - ry0) * (k + 0.5) / nb
+                cyl = lathe([(0.0, 0.0), (0.034, 0.0), (0.034, 0.10), (0.0, 0.10)], 6, split=(1, 2))
+                cap = 'int_accent_red' if (k + row) % 2 else 'int_black'
+                for j, (mesh, sm) in enumerate(cyl):
+                    mesh = mv(rot(mesh, 'y', math.pi / 2), bx - 0.16, yy, zc - 0.005)
+                    kit.add(cap if j == 2 else 'int_black', mesh, sm)
+        kit.add('int_glass', ([(bx + 0.002, ry0, rz0), (bx + 0.002, ry1, rz0), (bx + 0.002, ry1, rz1),
+                               (bx + 0.002, ry0, rz1)], [(0, 1, 2, 3)]), False)
+        kit.add('metal_dark', box((bx + 0.002, ry0 + 0.02, rz1 - 0.04), (bx + 0.024, ry0 + 0.035, rz1 - 0.01),
+                                  skip=('-x',)), False)
+    # the top
+    side, caps = slab(lambda ins: rrect2(d - 2 * ins, w - 2 * ins, 0.012 - ins, 1), zt0, H, 0.004, 1)
+    kit.add('int_marble', side, True)
+    kit.add('int_marble', caps, False)
+    # the gas hob: black glass, five burners, two grates
+    hx = P['hob_x']
+    kit.add('int_black', box((hx - 0.25, -0.37, H), (hx + 0.25, 0.37, H + 0.006), skip=('-z',)), False)
+    for (bxx, byy, r) in ((hx - 0.13, -0.22, 0.05), (hx + 0.13, -0.22, 0.04), (hx, 0.0, 0.065),
+                          (hx - 0.13, 0.22, 0.045), (hx + 0.13, 0.22, 0.04)):
+        for mesh, sm in lathe([(0.0, 0.0), (r, 0.0), (r, 0.018), (r * 0.55, 0.026), (0.0, 0.026)], 8, bxx, byy,
+                              split=(1, 2, 3)):
+            kit.add('metal_dark', mv(mesh, 0, 0, H + 0.006), sm)
+    for gx in (hx - 0.13, hx + 0.13):
+        kit.add('metal_dark', box((gx - 0.006, -0.35, H + 0.026), (gx + 0.006, 0.35, H + 0.036)), False)
+    for gy in (-0.22, 0.0, 0.22):
+        kit.add('metal_dark', box((hx - 0.22, gy - 0.006, H + 0.026), (hx + 0.22, gy + 0.006, H + 0.036)), False)
+    # the hood: a steel cylinder to the ceiling, a dark filter under it
+    ceil = P['ceiling']
+    for mesh, sm in lathe([(0.16, 1.60), (0.16, ceil - 0.002)], 20, hx, 0.0):
+        kit.add('chrome', mesh, True)
+    kit.add('int_black', lathe([(0.0, 1.601), (0.16, 1.601)], 20, hx, 0.0)[0][0], False)
+    # a bowl at the far end of the top, away from the cooler
+    bowl(kit, rnd.uniform(-0.08, 0.08), -by + 0.28, H, 0.13, 0.07, 'int_ceramic', 14)
+
+
+def b_hall_wardrobe(kit, w, d, seed, P):
+    """The hall's wardrobe wall (renders 5, 6, 9, 11, 12): bays of paired
+    greige doors with an arched groove, and open walnut shelf bays lit by a
+    warm strip, floor to near the ceiling. Back on the wall at -X, doors at
+    +X."""
+    rnd = random.Random(seed * 23 + 11)
+    H = P['h']
+    x0, x1 = -d / 2.0, d / 2.0
+    PL = 0.08
+    t = 0.019
+    nopen = 1 if w < 2.5 else 2
+    ow = 0.42
+    nd = nopen + 1
+    dw = (w - nopen * ow) / nd
+    bays = []
+    y = -w / 2
+    for i in range(nd):
+        bays.append(('door', y, y + dw))
+        y += dw
+        if i < nopen:
+            bays.append(('open', y, y + ow))
+            y += ow
+    # carcass: the outer sides, the top, the plinth recess
+    kit.add(GREIGE, box((x0, -w / 2, 0.0), (x1, -w / 2 + t, H), skip=('-x',)), False)
+    kit.add(GREIGE, box((x0, w / 2 - t, 0.0), (x1, w / 2, H), skip=('-x',)), False)
+    kit.add(GREIGE, box((x0, -w / 2 + t, H - 0.03), (x1, w / 2 - t, H), skip=('-x', '-y', '+y')), False)
+    kit.add('int_black', box((x0 + 0.02, -w / 2 + t, 0.0), (x1 - 0.05, w / 2 - t, PL), skip=('-z', '-x', '-y', '+y')), False)
+    for kind, ya, yb in bays:
+        if kind == 'door':
+            a = ya + (t if ya <= -w / 2 + 1e-6 else 0.0)
+            b = yb - (t if yb >= w / 2 - 1e-6 else 0.0)
+            nn = max(1, int(round((b - a) / 0.45)))
+            for k in range(nn):
+                da = a + (b - a) * k / nn + 0.0015
+                db = a + (b - a) * (k + 1) / nn - 0.0015
+                kit.add(GREIGE, box((x1 - 0.02, da, PL + 0.002), (x1, db, H - 0.032), skip=('-x',)), False)
+                # the arched groove
+                r = (db - da) / 2 - 0.07
+                if r > 0.05:
+                    yc = (da + db) / 2
+                    zt = H - 0.032 - 0.22 - r
+                    pts = [(yc - r, PL + 0.20), (yc - r, zt)]
+                    for j in range(1, 9):
+                        an = math.pi - math.pi * j / 9
+                        pts.append((yc + r * math.cos(an), zt + r * math.sin(an)))
+                    pts += [(yc + r, zt), (yc + r, PL + 0.20)]
+                    stroke(kit, WALNUT, pts, 0.008, x1 + 0.0008)
+                # a slim bronze pull at the meeting edge
+                py = db - 0.03 if k % 2 == 0 else da + 0.03
+                kit.add('int_brass', box((x1, py - 0.006, 0.95), (x1 + 0.018, py + 0.006, 1.25), skip=('-x',)), False)
+        else:
+            a, b = ya, yb
+            kit.add(WALNUT, box((x0, a, PL), (x1, a + t, H - 0.03), skip=('-x',)), False)
+            kit.add(WALNUT, box((x0, b - t, PL), (x1, b, H - 0.03), skip=('-x',)), False)
+            a, b = a + t, b - t
+            kit.add(WALNUT, box((x0, a, PL), (x0 + 0.012, b, H - 0.03), skip=('-x', '-y', '+y')), False)
+            ns = 6
+            zs = [PL + (H - 0.03 - PL) * k / ns for k in range(ns)]
+            for k, z in enumerate(zs):
+                kit.add(WALNUT, box((x0 + 0.012, a, z), (x1 - 0.01, b, z + 0.018), skip=('-x', '-y', '+y')), False)
+            kit.add(LED, box((x1 - 0.035, a, PL + 0.02), (x1 - 0.025, a + 0.008, H - 0.05), skip=('-y',)), False)
+            ym = (a + b) / 2
+            for k in range(1, ns):
+                z = zs[k] + 0.018
+                pick = rnd.randrange(3)
+                if pick == 0:
+                    vase(kit, x0 + 0.30, ym + rnd.uniform(-0.05, 0.05), z, 0.20, 0.045, 'int_ceramic', 10, 0)
+                elif pick == 1:
+                    lying_book(kit, x0 + 0.30, ym, z, 0.24, min(0.18, b - a - 0.04), 0.03,
+                               (FAB_G, 'int_fabric_white', 'int_fabric_orange')[k % 3], rnd.uniform(-0.1, 0.1))
+                else:
+                    bowl(kit, x0 + 0.30, ym, z, 0.09, 0.05, 'int_stone_dark', 10)
+
+
+def b_ac_unit(kit, w, d, seed, P):
+    """The loggia's outdoor A/C unit (renders 4, 5, 7, 13): a black box on
+    two feet with a round fan grille, and a white pipe elbow into the wall
+    behind it. Back on the wall at -X."""
+    x0, x1 = -d / 2.0, d / 2.0
+    z0, H = 0.06, P['h']
+    kit.add('int_black', box((x0 + 0.02, -w / 2, z0), (x1, w / 2, z0 + H), skip=('-x',)), False)
+    for s in (-1, 1):
+        kit.add('metal_dark', box((x0 + 0.04, s * (w / 2 - 0.08) - 0.02, 0.0), (x1 - 0.02, s * (w / 2 - 0.08) + 0.02, z0),
+                                  skip=('-z', '+z')), False)
+    fy = -w / 2 + min(0.30, w * 0.38)
+    rr = min(0.21, H * 0.40)
+    for k, r in enumerate((rr, rr * 0.68, rr * 0.36)):
+        ring = lathe([(r, 0.0), (r - 0.012, 0.0)], 18)        # faces +z, then turned to +X
+        for mesh, sm in ring:
+            kit.add('metal_dark', mv(rot(mesh, 'y', math.pi / 2), x1 + 0.002 + 0.001 * k, fy, z0 + H / 2), False)
+    for k in range(4):
+        a = math.pi / 4 * k
+        p0 = (x1 + 0.003, fy - rr * math.cos(a), z0 + H / 2 - rr * math.sin(a))
+        p1 = (x1 + 0.003, fy + rr * math.cos(a), z0 + H / 2 + rr * math.sin(a))
+        stroke(kit, 'metal_dark', [(p0[1], p0[2]), (p1[1], p1[2])], 0.008, x1 + 0.003)
+    py = w / 2 - 0.08
+    path = [(x0 + 0.06, py, z0 + H * 0.6), (x0 + 0.06, py + 0.10, z0 + H * 0.6), (x0 + 0.06, py + 0.13, z0 + H * 0.6 + 0.04),
+            (x0 + 0.06, py + 0.13, z0 + H + 0.12), (x0 + 0.03, py + 0.13, z0 + H + 0.15), (x0 - 0.002, py + 0.13, z0 + H + 0.15)]
+    side, caps = sweep(path, circle2(0.022, 8))
+    kit.add('int_white_gloss', side, True)
+
+
+def b_tv(kit, w, d, seed, P):
+    """The TV wall (renders 6, 12): a greige feature panel as wide as the
+    console, a warm strip along its top, a slim screen hung on it, and a
+    floating walnut shelf below with a vase and a candle. console_w /
+    console_d as before (the integrator fits console_w to the wall)."""
+    rnd = random.Random(seed * 101 + 3)
+    cw = P['console_w'] or max(1.40, min(2.2, w + 0.70))
+    cd = min(0.38, P['console_d'])
+    bx0 = -d / 2
+    ph = 2.40
+    kit.add(GREIGE, box((bx0, -cw / 2, 0.0), (bx0 + 0.04, cw / 2, ph), skip=('-x', '-z')), False)
+    kit.add(LED, box((bx0 + 0.02, -cw / 2 + 0.03, ph), (bx0 + 0.036, cw / 2 - 0.03, ph + 0.006), skip=('-z', '-x')), False)
+    # the shelf, floating, two drawer seams
+    sz0, sz1 = 0.30, 0.52
+    kit.add(WALNUT, box((bx0 + 0.04, -cw / 2 + 0.02, sz0), (bx0 + 0.04 + cd, cw / 2 - 0.02, sz1), skip=('-x',)), False)
+    for yy in (-cw / 6, cw / 6):
+        kit.add('int_black', box((bx0 + 0.04 + cd, yy - 0.002, sz0 + 0.02), (bx0 + 0.041 + cd, yy + 0.002, sz1 - 0.02),
+                                 skip=('-x',)), False)
+    # the screen, 16:9, hung with its centre at 1.25
+    sw = max(1.0, min(1.4, w + 0.4, cw - 0.3))
+    sh = sw * 0.5625
+    tx = bx0 + 0.04
+    zc = 1.25
+    kit.add('metal_dark', box((tx, -sw / 2, zc - sh / 2), (tx + 0.025, sw / 2, zc + sh / 2), skip=('-x',)), False)
+    kit.add('int_black', ([(tx + 0.0255, -sw / 2 + 0.006, zc - sh / 2 + 0.006), (tx + 0.0255, sw / 2 - 0.006, zc - sh / 2 + 0.006),
+                           (tx + 0.0255, sw / 2 - 0.006, zc + sh / 2 - 0.006), (tx + 0.0255, -sw / 2 + 0.006, zc + sh / 2 - 0.006)],
+                          [(0, 1, 2, 3)]), False)
+    if P['decor']:
+        s = 1 if rnd.random() < 0.5 else -1
+        xm = bx0 + 0.04 + cd * 0.5
+        vase(kit, xm, s * (cw / 2 - 0.20), sz1, 0.30, 0.06, 'int_ceramic', 12, 0)
+        vase(kit, xm, s * (cw / 2 - 0.34), sz1, 0.16, 0.07, 'int_stone_dark', 12, 1)
+        for mesh, sm in lathe([(0.0, 0.0), (0.04, 0.0), (0.04, 0.10), (0.0, 0.10)], 10, xm, -s * (cw / 2 - 0.25),
+                              split=(1, 2)):
+            kit.add('int_ceramic', mv(mesh, 0, 0, sz1), sm)
+
+
 def b_wall_art(kit, w, d, seed, P):
-    """A framed print on the wall: an oak or black frame, a white mount, an
-    abstract composition in the flat's palette. Back on x = -d/2."""
+    """A framed abstract (renders 4, 5, 7, 11): a thin black or walnut frame,
+    a warm white canvas, a few greige / rust fields and black line strokes.
+    Back on x = -d/2."""
     rnd = random.Random(seed * 53 + int(w * 100))
     W = w
-    Hh = P['h'] or (round(W * 1.30, 3) if W <= 0.75 else round(W * 0.72, 3))   # portrait, or landscape when wide
+    Hh = P['h'] or (round(W * 1.30, 3) if W <= 0.75 else round(W * 0.72, 3))
     zc = P['cz']
-    fr = 0.022
+    fr = 0.016
     dep = max(0.02, min(0.04, d))
     x0 = -d / 2
     style = int(P['style']) if P['style'] >= 0 else rnd.randrange(3)
-    FR = ['int_wood_oak', 'int_black', 'int_wood_walnut'][style % 3]
-    # frame: four mitred bars, flat-shaded with a small chamfer outside
-    o = [(W / 2, Hh / 2), (-W / 2, Hh / 2), (-W / 2, -Hh / 2), (W / 2, -Hh / 2)]
-    i_ = [(W / 2 - fr, Hh / 2 - fr), (-W / 2 + fr, Hh / 2 - fr), (-W / 2 + fr, -Hh / 2 + fr), (W / 2 - fr, -Hh / 2 + fr)]
-    # frame as a closed ring solid: front face, back face, outer side, inner side
-    V, F = [], []
-    xf, xb = x0 + dep, x0
-    for (yy, zz) in o:
-        V.append((xb, yy, zc + zz))
-    for (yy, zz) in o:
-        V.append((xf - 0.004, yy, zc + zz))
-    for (yy, zz) in i_:
-        V.append((xf, yy, zc + zz))
-    for (yy, zz) in i_:
-        V.append((xf - 0.010, yy, zc + zz))
-    for j in range(4):
-        jn = (j + 1) % 4
-        F.append((j, jn, 4 + jn, 4 + j))                # outer side
-        F.append((4 + j, 4 + jn, 8 + jn, 8 + j))        # front (bevelled in)
-        F.append((8 + j, 8 + jn, 12 + jn, 12 + j))      # inner lip
-        F.append((12 + j, 12 + jn, jn, j))              # back to the wall (the rebate)
-    m = (V, F)
-    if signed_volume(m) < 0:
-        m = flip(m)
-    kit.add(FR, m, False)
-    # the mount (passe-partout), set back 10 mm
-    xm = xf - 0.010
-    mw, mh = W - 2 * fr, Hh - 2 * fr
-    kit.add('int_fabric_white', ([(xm, -mw / 2, zc - mh / 2), (xm, mw / 2, zc - mh / 2), (xm, mw / 2, zc + mh / 2),
-                                  (xm, -mw / 2, zc + mh / 2)], [(0, 1, 2, 3)]), False)
-    # the picture area
-    pw, ph = mw * 0.68, mh * 0.72
-    pz = zc + mh * 0.03
-    xp = xm + 0.001
-    pal = ['int_fabric_orange', 'int_fabric_teal', 'int_mint', 'int_accent_red', 'int_fabric_bluegrey', 'int_brass',
-           'int_fabric_dark', 'int_wood_oak']
-    rnd.shuffle(pal)
+    FR = ('int_black', WALNUT, 'int_black')[style % 3]
+    xf = x0 + dep
+    # the frame: four bars
+    for (a0, a1, b0, b1) in ((-W / 2, W / 2, Hh / 2 - fr, Hh / 2), (-W / 2, W / 2, -Hh / 2, -Hh / 2 + fr),
+                             (-W / 2, -W / 2 + fr, -Hh / 2 + fr, Hh / 2 - fr), (W / 2 - fr, W / 2, -Hh / 2 + fr, Hh / 2 - fr)):
+        kit.add(FR, box((x0, a0, zc + b0), (xf, a1, zc + b1), skip=('-x',)), False)
+    xc = xf - 0.008
+    cw, chh = W - 2 * fr, Hh - 2 * fr
 
     def rect(mat, y0, y1, z0, z1, xx):
-        kit.add(mat, ([(xx, y0, z0), (xx, y1, z0), (xx, y1, z1), (xx, y0, z1)], [(0, 1, 2, 3)]), False)
-
-    def disc(mat, cy, cz, r, xx, n=24, half=False):
-        Vd = [(xx, cy, cz)]
-        nn = n // 2 if half else n
-        for k in range(nn + 1 if half else n):
-            a = (math.pi * k / nn) if half else TAU * k / n
-            Vd.append((xx, cy + r * math.cos(a), cz + r * math.sin(a)))
-        if half:
-            Fd = [(0, k + 1, k + 2) for k in range(nn)]
-        else:
-            Fd = [(0, k + 1, (k + 1) % n + 1) for k in range(n)]
-        kit.add(mat, (Vd, Fd), False)
-    # the ground
-    rect('int_fabric_white' if style != 1 else 'int_tile_white', -pw / 2, pw / 2, pz - ph / 2, pz + ph / 2, xp)
-    ground = pal[0] if style == 1 else 'int_fabric_white'
+        kit.add(mat, ([(xx, y0, zc + z0), (xx, y1, zc + z0), (xx, y1, zc + z1), (xx, y0, zc + z1)], [(0, 1, 2, 3)]), False)
+    rect(FAB_W, -cw / 2, cw / 2, -chh / 2, chh / 2, xc)
+    lw = max(0.004, W * 0.008)
     if style == 0:
-        # mid-century: a sun over two hills of colour
-        rect(pal[1], -pw / 2, pw / 2, pz - ph / 2, pz - ph * 0.12, xp + 0.001)
-        disc(pal[2], pw * 0.12, pz + ph * 0.12, pw * 0.22, xp + 0.002, 28)
-        disc(pal[3], -pw * 0.18, pz - ph * 0.12, pw * 0.30, xp + 0.003, 28, half=True)
+        # a greige field, a black arc sweeping over it
+        rect(FAB_G, -cw * 0.30, cw * 0.18, -chh * 0.32, chh * 0.10, xc + 0.001)
+        pts = [(-cw * 0.36 + cw * 0.72 * k / 10, chh * (0.18 - 0.30 * math.sin(math.pi * k / 10))) for k in range(11)]
+        stroke(kit, 'int_black', pts, lw, xc + 0.002)
     elif style == 1:
-        # colour field: three stacked bands
-        rect(pal[0], -pw / 2, pw / 2, pz + ph * 0.10, pz + ph / 2, xp + 0.001)
-        rect(pal[1], -pw / 2, pw / 2, pz - ph * 0.22, pz + ph * 0.06, xp + 0.001)
-        rect(pal[2], -pw / 2, pw / 2, pz - ph / 2, pz - ph * 0.26, xp + 0.001)
+        # two overlapping fields, greige and rust, a thin rule
+        rect(FAB_G, -cw * 0.34, cw * 0.10, -chh * 0.30, chh * 0.28, xc + 0.001)
+        rect('int_fabric_orange', -cw * 0.02, cw * 0.32, -chh * 0.38, chh * 0.02, xc + 0.002)
+        stroke(kit, 'int_black', [(-cw * 0.38, chh * 0.36), (cw * 0.38, chh * 0.36)], lw * 0.7, xc + 0.003)
     else:
-        # bauhaus: a quarter circle, a bar and a dot
-        rect(pal[0], -pw / 2, pw * 0.05, pz - ph / 2, pz + ph * 0.05, xp + 0.001)
-        disc(pal[1], pw * 0.18, pz + ph * 0.22, pw * 0.16, xp + 0.002, 24)
-        rect(pal[2], -pw * 0.3, pw / 2, pz - ph * 0.30, pz - ph * 0.22, xp + 0.003)
-    # a glass sheet over it all
-    kit.add('int_glass', ([(xf - 0.003, -mw / 2, zc - mh / 2), (xf - 0.003, mw / 2, zc - mh / 2),
-                           (xf - 0.003, mw / 2, zc + mh / 2), (xf - 0.003, -mw / 2, zc + mh / 2)], [(0, 1, 2, 3)]), False)
+        # a line drawing: a loose loop and a small dark disc
+        pts = []
+        for k in range(15):
+            an = TAU * k / 14
+            pts.append((cw * 0.22 * math.cos(an) + cw * 0.06 * math.cos(2 * an), chh * 0.24 * math.sin(an) - chh * 0.04))
+        stroke(kit, 'int_black', pts, lw, xc + 0.002)
+        n = 14
+        Vd = [(xc + 0.0015, cw * 0.18, chh * 0.22 + zc)]
+        for k in range(n):
+            an = TAU * k / n
+            Vd.append((xc + 0.0015, cw * 0.18 + cw * 0.07 * math.cos(an), zc + chh * 0.22 + cw * 0.07 * math.sin(an)))
+        kit.add(FAB_G, (Vd, [(0, k + 1, (k + 1) % n + 1) for k in range(n)]), False)
 
 
 def b_curtains(kit, w, d, seed, P):
-    """A pair of floor-length pleated curtains on a rod, drawn open to the
-    sides of a window w wide. Back (the wall) on x = -d/2; the rod hangs
-    P['head'] + 0.12 up (under the ceiling), its ends 0.22 past the opening."""
+    """A pair of floor-length warm white sheers (all the renders), drawn
+    open to the sides of a window w wide, hung from a hidden ceiling track.
+    Back (the wall) on x = -d/2; the cloth runs 0.22 past each side of the
+    opening and from just under the ceiling to 1 cm off the floor."""
     rnd = random.Random(seed * 17 + 2)
     head = P['head']
     ceil = P['ceiling']
     over = 0.22
-    rz = min(head + 0.13, ceil - 0.05)
-    xw = -d / 2
-    xr = xw + 0.10                                 # the rod's axis, 10 cm off the wall
+    rz = min(max(head + 0.13, ceil - 0.06), ceil - 0.03)
+    xr = -d / 2 + 0.10
     L = w + 2 * over
-    # the rod: matt black, two wall brackets, ball finials
-    kit.add('metal_dark', sweep([(xr, -L / 2 - 0.02, rz), (xr, L / 2 + 0.02, rz)], circle2(0.011, 8))[0], True)
-    for s in (-1, 1):
-        for mesh, sm in lathe([(0, rz - 0.022), (0.02, rz - 0.017), (0.024, rz), (0.02, rz + 0.017), (0, rz + 0.022)],
-                              10, xr, s * (L / 2 + 0.035)):
-            kit.add('metal_dark', mesh, True)
-        by = s * (L / 2 - 0.08)
-        kit.add('metal_dark', box((xw, by - 0.008, rz - 0.01), (xr, by + 0.008, rz + 0.01), skip=('-x',)), False)
-        side, caps = slab(lambda ins: circle2(0.025 - ins, 10, 0), 0, 0.008, 0.002, 1)
-        disk = rot(merge(side, caps), 'y', math.pi / 2)
-        kit.add('metal_dark', mv(disk, xw + 0.0, by, rz), False)
-    # the cloth: a gathered sheet hanging from just under the rod to 1 cm off
-    # the floor; open fraction -> how much of the window each panel covers
     opn = max(0.0, min(1.0, P['open']))
-    top = rz - 0.035
+    top = rz
     bot = 0.012
     for s in (-1, 1):
         outer_y = s * (L / 2 - 0.03)
-        stack = max(0.28, min(0.50, 0.18 + 0.10 * w))   # the gathered panel, drawn right back
+        stack = max(0.28, min(0.50, 0.18 + 0.10 * w))
         span = stack + (w / 2) * (1.0 - opn)
         inner_y = outer_y - s * span
-        pleat = 0.10
-        nP = max(3, int(round(span / pleat)))
+        nP = max(3, int(round(span / 0.10)))
         samples = nP * 4
-        nz = 4
+        nz = 3
         V, F = [], []
         ph = rnd.uniform(0, TAU)
         for iz in range(nz + 1):
             tz = iz / nz
-            z = bot + (top - bot) * (1 - tz) ** 1.0
-            # toward the floor the pleats open a little and the hem kicks out
+            z = bot + (top - bot) * (1 - tz)
             amp = 0.036 + 0.010 * tz
-            fl = 1.0 + 0.10 * tz                    # the panel spreads toward the hem
+            fl = 1.0 + 0.08 * tz
             for k in range(samples + 1):
                 u = k / samples
-                yy = outer_y + (inner_y - outer_y) * u
-                yy = outer_y + (yy - outer_y) * fl if True else yy
-                wave = math.sin(u * nP * TAU + ph * 0.0)
-                # pinch pleats at the top: sharp folds; softer lower down
-                x = xr + 0.045 + amp * wave * (0.75 + 0.25 * math.sin(u * 7 + ph))
+                yy = outer_y + (inner_y - outer_y) * u * fl
+                wave = math.sin(u * nP * TAU)
+                x = xr + 0.02 + amp * wave * (0.75 + 0.25 * math.sin(u * 7 + ph))
                 V.append((x, yy, z))
         n = samples + 1
         for iz in range(nz):
             for k in range(samples):
                 a = iz * n + k
-                q = (a, a + 1, a + n + 1, a + n)
-                # face the room (+X): wind so the normal points +x on average
-                F.append(q if s > 0 else q)
+                F.append((a, a + 1, a + n + 1, a + n))
         m = (V, F)
-        # make the sheet face +X (into the room): test one face normal
         a, b, c = V[F[0][0]], V[F[0][1]], V[F[0][2]]
         nrm = _cross(_v_sub(b, a), _v_sub(c, b))
-        mesh = m if nrm[0] > 0 else flip(m)
-        kit.add('int_curtain', mesh, True)
-        # the heading tape along the top: a thin straight band
-    return
+        kit.add('int_curtain', m if nrm[0] > 0 else flip(m), True)
 
 
 # ====================================================================== registry
 KINDS = {
     'sofa': dict(
         drawn=True, wall=True, solid=True,
-        params=dict(seat_h=(0.45, 0.40, 0.48), arm_w=(0.16, 0.10, 0.24), cushions=(0, 0, 3),
-                    scatter=(2, 0, 3), throw=(1, 0, 1), fabric=(0, 0, 5)),
+        params=dict(seat_h=(0.42, 0.38, 0.48), arm_w=(0.16, 0.10, 0.24), cushions=(0, 0, 3),
+                    scatter=(2, 0, 3), throw=(1, 0, 1), fabric=(0, 0, 5), chaise=(0, -1, 1),
+                    chaise_len=(1.55, 0.0, 1.80)),
         footprint='w = across (local Y, arm to arm), d = along the facing (local X, back at -d/2, seat front at +d/2). '
                   'The whole piece stays inside the box except the front of the seat cushions (1 cm proud) and the '
                   'throw (2-3 cm outside one arm). Drawn boxes: 1.80 x 1.00 everywhere; 1.4-2.6 x 0.8-1.05 works.',
-        notes='Seat top 0.45, arms 0.62, back cushions to ~0.88. 2 seat/back cushions under 1.75 m inner width, else 3. '
-              'Scatter cushions and the throw colour/side vary with seed. fabric indexes FABRICS (0 = int_fabric_sofa). '
-              'Main material int_fabric_sofa; legs int_wood_walnut; accents int_fabric_orange/teal/white/bluegrey.'),
+        notes='Modular boucle (the owner\'s renders): seat 0.42, arms 0.58, backs 0.74, no legs; int_fabric_white, '
+              'cushions and throw int_fabric_sofa (greige). chaise=+1/-1 pulls the seat block at the +Y/-Y end '
+              'forward to chaise_len from the back (the piece then reaches x = -d/2 + chaise_len) and drops that arm. '
+              'arm_w, cushions, scatter, throw, fabric are kept for old callers and ignored.'),
+    'loveseat': dict(
+        drawn=False, wall=False, solid=True,
+        params=dict(seat_h=(0.42, 0.38, 0.48)),
+        footprint='w across (1.3-1.8), d along the facing (0.85-0.95); back at -d/2.',
+        notes='The sofa\'s straight two-seat partner, set at 90 degrees to it across the coffee table.'),
+    'pouf': dict(
+        drawn=False, wall=False, solid=False,
+        params=dict(h=(0.38, 0.30, 0.39)),
+        footprint='a round pouf of diameter min(w, d) (0.45-0.60).',
+        notes='Boucle, 0.38 high: under the walk\'s 0.4 m line, so not solid.'),
+    'table_dining': dict(
+        drawn=False, wall=False, solid=True,
+        params=dict(),
+        footprint='w = the table\'s LENGTH (local Y, 1.2-1.8), d = its width (local X, 0.8-0.95).',
+        notes='Walnut top at 0.75, apron, four tapered legs. lib_dress replaces the drawn round table and its three '
+              'chairs with it and four chairs on its long sides where the room has the floor.'),
+    'tall_walnut': dict(
+        drawn=False, wall=True, solid=True,
+        params=dict(h=(2.60, 2.0, 3.3), app=(1, 0, 2), hand=(1, -1, 1)),
+        footprint='w across (0.40-1.10), d = the run\'s depth; back on the wall at -X, fronts at +X.',
+        notes='Floor-to-ceiling walnut column at a run end: app 1 black fridge / 2 two ovens / 0 none in a 0.62 bay '
+              'on the hand side, the rest an open niche of six lit shelves (int_lamp_shade strips).'),
+    'kitchen_island': dict(
+        drawn=False, wall=False, solid=True,
+        params=dict(ceiling=(3.0, 2.4, 3.4), hob_x=(-0.05, -0.2, 0.2)),
+        footprint='w = the island\'s LENGTH (local Y, 1.6-2.6), d = its depth (local X, 0.85-1.05). +X is the room side '
+                  '(the wine cooler), -X the cook\'s side (toward the run). The hood is a 0.32 cylinder over the hob '
+                  'from 1.6 m to `ceiling`.',
+        notes='Greige reeded body, marble top, black gas hob, wine cooler when w >= 1.8, steel hood (chrome).'),
+    'hall_wardrobe': dict(
+        drawn=False, wall=True, solid=True,
+        params=dict(h=(2.60, 2.0, 3.3)),
+        footprint='w across (1.6-3.2), d along (0.55-0.62); back on the wall at -X, doors at +X.',
+        notes='Paired greige doors with an arched walnut groove and bronze pulls, one or two open walnut shelf bays '
+              '(0.42) lit by a warm strip, floor to h.'),
+    'ac_unit': dict(
+        drawn=False, wall=True, solid=True,
+        params=dict(h=(0.55, 0.45, 0.65)),
+        footprint='w across (0.70-0.90), d along (0.28-0.34); back on the wall at -X.',
+        notes='Black outdoor unit with a fan grille and a white pipe elbow into the wall; on a loggia.'),
     'armchair': dict(
         drawn=False, wall=False, solid=True,
         params=dict(seat_h=(0.43, 0.40, 0.46), arm_w=(0.14, 0.10, 0.20), scatter=(1, 0, 1), fabric=(2, 0, 5)),
@@ -1316,11 +1633,11 @@ KINDS = {
               'window, turned toward the coffee table; the back may stand free.'),
     'table_coffee': dict(
         drawn=True, wall=False, solid=False,
-        params=dict(h=(0.40, 0.35, 0.45), decor=(1, 0, 1)),
-        footprint='w across (local Y, the long side as drawn: 1.20), d along the facing (local X, 0.60). The legs splay '
-                  '1 cm inside the box; nothing outside it.',
-        notes='Top int_coffee_top (the owner\'s), walnut legs and shelf, books / bowl / vase on top. 0.40 high: under '
-              'the walk\'s 0.4 m solid threshold by design (only the top is at 0.40).'),
+        params=dict(h=(0.38, 0.35, 0.40), decor=(1, 0, 1)),
+        footprint='w across, d along as drawn (1.20 x 0.60); the table is a disc of diameter clamp(d + 0.12, 0.60, '
+                  '0.76) centred in the box (it overhangs the drawn depth by up to 8 cm).',
+        notes='Round navy top (int_coffee_top) on an inset walnut drum, a walnut tray with a candle and a vase. '
+              '0.38 high: under the walk\'s 0.4 m solid line.'),
     'tv': dict(
         drawn=True, wall=True, solid=True,
         params=dict(console_w=(0.0, 0.0, 2.4), console_d=(0.40, 0.32, 0.48), console_h=(0.50, 0.40, 0.60),
@@ -1340,7 +1657,7 @@ KINDS = {
               'Pair with the pendant above its centre.'),
     'chair': dict(
         drawn=True, wall=False, solid=True,
-        params=dict(seat_h=(0.46, 0.43, 0.48), fabric=(3, 0, 5)),
+        params=dict(seat_h=(0.47, 0.43, 0.49), fabric=(3, 0, 5)),
         footprint='w across (seat width = clamp(w + 0.04, 0.40, 0.48)), d along the facing (seat depth = '
                   'clamp(d - 0.03, 0.40, 0.46)); faces +X (toward its table), back rail at -X. The seat is '
                   'centred 1.5 cm forward of the box centre; the back rail\'s top leans back to ~ -d/2 - 0.03.',
@@ -1401,6 +1718,8 @@ _BUILDERS = {
     'sofa': b_sofa, 'armchair': b_armchair, 'table_coffee': b_table_coffee, 'tv': b_tv, 'table_round': b_table_round,
     'chair': b_chair, 'rug': b_rug, 'floor_lamp': b_floor_lamp, 'bookshelf': b_bookshelf, 'sideboard': b_sideboard,
     'wall_art': b_wall_art, 'curtains': b_curtains, 'pendant': b_pendant,
+    'loveseat': b_loveseat, 'pouf': b_pouf, 'table_dining': b_table_dining, 'tall_walnut': b_tall_walnut,
+    'kitchen_island': b_kitchen_island, 'hall_wardrobe': b_hall_wardrobe, 'ac_unit': b_ac_unit,
 }
 
 # the material a node should be named after (CONTRACT: ..._furn_<kind><k>__<material>)
@@ -1408,7 +1727,9 @@ MAIN_MAT = {
     'sofa': 'int_fabric_sofa', 'armchair': 'int_fabric_teal', 'table_coffee': 'int_coffee_top', 'tv': 'int_wood_walnut',
     'table_round': 'int_marble', 'chair': 'int_wood_oak', 'rug': 'int_rug', 'floor_lamp': 'int_lamp_shade',
     'bookshelf': 'int_wood_oak', 'sideboard': 'int_wood_walnut', 'wall_art': 'int_wood_oak', 'curtains': 'int_curtain',
-    'pendant': 'int_brass',
+    'pendant': 'int_brass', 'loveseat': 'int_fabric_white', 'pouf': 'int_fabric_white',
+    'table_dining': 'int_wood_walnut', 'tall_walnut': 'int_wood_walnut', 'kitchen_island': 'int_mint',
+    'hall_wardrobe': 'int_mint', 'ac_unit': 'int_black',
 }
 
 
@@ -1440,7 +1761,8 @@ DEFAULT_SIZE = {
     'sofa': (1.80, 1.00), 'armchair': (0.82, 0.84), 'table_coffee': (1.20, 0.60), 'tv': (0.80, 0.20),
     'table_round': (0.80, 0.80), 'chair': (0.40, 0.47), 'rug': (2.00, 1.40), 'floor_lamp': (0.40, 0.40),
     'bookshelf': (1.00, 0.35), 'sideboard': (1.60, 0.42), 'wall_art': (0.60, 0.03), 'curtains': (1.40, 0.16),
-    'pendant': (0.40, 0.40),
+    'pendant': (0.40, 0.40), 'loveseat': (1.60, 0.90), 'pouf': (0.55, 0.55), 'table_dining': (1.40, 0.85),
+    'tall_walnut': (1.00, 0.62), 'kitchen_island': (2.00, 0.95), 'hall_wardrobe': (2.20, 0.60), 'ac_unit': (0.80, 0.30),
 }
 SIZE_RANGE = {
     'sofa': ((1.40, 0.80), (2.60, 1.05)), 'armchair': ((0.70, 0.75), (0.95, 0.92)),
@@ -1449,21 +1771,24 @@ SIZE_RANGE = {
     'rug': ((1.20, 0.80), (3.00, 2.40)), 'floor_lamp': ((0.34, 0.34), (0.48, 0.48)),
     'bookshelf': ((0.80, 0.30), (2.00, 0.40)), 'sideboard': ((1.00, 0.38), (2.20, 0.48)),
     'wall_art': ((0.40, 0.03), (1.20, 0.04)), 'curtains': ((0.80, 0.16), (3.00, 0.16)),
-    'pendant': ((0.30, 0.30), (0.60, 0.60)),
+    'pendant': ((0.30, 0.30), (0.60, 0.60)), 'loveseat': ((1.30, 0.85), (1.80, 0.95)),
+    'pouf': ((0.45, 0.45), (0.60, 0.60)), 'table_dining': ((1.20, 0.80), (1.80, 0.95)),
+    'tall_walnut': ((0.45, 0.60), (1.10, 0.65)), 'kitchen_island': ((1.60, 0.85), (2.60, 1.05)),
+    'hall_wardrobe': ((1.60, 0.55), (3.20, 0.62)), 'ac_unit': ((0.70, 0.28), (0.90, 0.34)),
 }
 
 
 # ====================================================================== preview (Blender only)
 PREVIEW_COL = {
-    'int_fabric_sofa': ('#7b7f86', 0.95, 0), 'int_fabric_bluegrey': ('#8294a8', 0.92, 0),
+    'int_fabric_sofa': ('#b9ab9b', 0.95, 0), 'int_fabric_bluegrey': ('#8294a8', 0.92, 0),
     'int_fabric_teal': ('#3c8a84', 0.92, 0), 'int_fabric_dark': ('#3d4148', 0.95, 0),
-    'int_fabric_white': ('#eeeae2', 0.88, 0), 'int_fabric_orange': ('#d6622a', 0.9, 0),
-    'int_wood_walnut': ('#4f3627', 0.48, 0), 'int_wood_oak': ('#b3895a', 0.55, 0),
-    'int_coffee_top': ('#2b3139', 0.22, 0), 'int_marble': ('#e8e5e0', 0.12, 0), 'int_ceramic': ('#ecece9', 0.10, 0),
+    'int_fabric_white': ('#ece7df', 0.92, 0), 'int_fabric_orange': ('#9a5a42', 0.9, 0),
+    'int_wood_walnut': ('#45291a', 0.45, 0), 'int_wood_oak': ('#b3895a', 0.55, 0),
+    'int_coffee_top': ('#27304a', 0.22, 0), 'int_marble': ('#e8e5e0', 0.12, 0), 'int_ceramic': ('#ecece9', 0.10, 0),
     'int_stone_dark': ('#3a3a3c', 0.32, 0), 'int_black': ('#111214', 0.25, 0.2), 'metal_dark': ('#43444a', 0.34, 0.9),
-    'int_brass': ('#b08c55', 0.35, 0.85), 'int_white_gloss': ('#e6e5e1', 0.22, 0), 'int_mint': ('#a7c3b2', 0.3, 0),
+    'int_brass': ('#a8806a', 0.35, 0.85), 'int_white_gloss': ('#e6e5e1', 0.22, 0), 'int_mint': ('#b4a38f', 0.55, 0),
     'int_accent_red': ('#8b2d29', 0.6, 0), 'int_rug': ('#9a9ea5', 0.95, 0), 'int_lamp_shade': ('#f1e8d6', 0.7, 0),
-    'int_curtain': ('#ccd2da', 0.86, 0), 'int_glass': ('#cfe3ea', 0.04, 0), 'int_tile_white': ('#e6e4df', 0.3, 0),
+    'int_curtain': ('#ebe7df', 0.86, 0), 'int_glass': ('#cfe3ea', 0.04, 0), 'int_tile_white': ('#e6e4df', 0.3, 0),
     'chrome': ('#cdd0d4', 0.14, 1.0), 'int_pot': ('#36322f', 0.6, 0),
 }
 

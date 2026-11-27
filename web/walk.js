@@ -686,6 +686,17 @@ export function createWalker( opts ) {
 			};
 		} catch ( e ) { worker = null; }
 	}
+	/* RIDE_FIELDS: `opts.rideFieldsOld` (app.js `?ridefields=old`) builds a
+	 * field for every storey a car passes, synchronously, and none ahead, as
+	 * before. New: none passed, and the stop's asked of the worker. */
+	const RIDE_FIELDS_OLD = !! opts.rideFieldsOld;
+	function fieldAhead( li ) {
+		const L = LV[ li ];
+		if ( ! L || L.field || ! worker ) return;
+		if ( [ ...pending.values() ].some( j => j.li === li && j.ver === L.ver ) ) return;
+		const id = ++ wid; pending.set( id, { li, ver: L.ver } );
+		worker.postMessage( { id, spec: fieldSpec( li ) } );
+	}
 	/* Keep the body's level and its neighbours, drop the rest; the
 	 * neighbours are asked for ahead of time (in the worker if there is one)
 	 * so a flight never waits on arithmetic. */
@@ -1155,7 +1166,11 @@ export function createWalker( opts ) {
 			if ( l.call === l.at && ! travelling && l.doorT > 0 ) l.call = null;
 			if ( travelling && l.doorT === 0 ) {
 				// shut: go. The body rides if it is standing in the car
-				if ( ! l.prof && l.v === 0 && B.lift === l ) l.riding = true;
+				if ( ! l.prof && l.v === 0 && B.lift === l && ! l.riding ) {
+					l.riding = true;
+					// RIDE_FIELDS: the stop's field is built in the worker on the way there
+					if ( ! RIDE_FIELDS_OLD ) fieldAhead( LI.get( l.stops[ l.target ].level ) );
+				}
 				busy = true;
 				if ( ! l.prof ) {
 					// the brake lifts a moment after the doors meet
@@ -1243,7 +1258,9 @@ export function createWalker( opts ) {
 		busy = liftsStep( dt ) || busy;
 
 		const riding = LIFTS.some( l => l.riding );
-		const G = ensureField( B.li );
+		/* RIDE_FIELDS: a car going past a storey does not collide with it -
+		 * the old line built every passed storey's field on the main thread. */
+		const G = riding && ! RIDE_FIELDS_OLD ? null : ensureField( B.li );
 		if ( riding ) {
 			B.vx = B.vy = 0;
 			B.bobY = B.sway = B.roll = B.nod = 0;
