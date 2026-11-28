@@ -110,5 +110,10 @@ require( 'fs' ).rmSync( PROFILE, { recursive: true, force: true } );
 		`   worst ${ Math.max( ...all ).toFixed( 1 ) } ms   over 20 ms: ` +
 		`${ ( all.filter( x => x > 20 ).length / all.length * 100 ).toFixed( 0 ) }%` );
 	console.log( `  settled at pr ${ d.pr } (step ${ d.step }) = ${ d.mpx } Mpx` );
+	// the stalls themselves: when each gap over 50 ms fell, and what they add up to
+	let at = 0; const gaps = [];
+	for ( const x of all ) { at += x; if ( x > 50 ) gaps.push( [ Math.round( at - x ), Math.round( x ) ] ); }
+	console.log( `  gaps over 50 ms: ${ gaps.length }, ${ gaps.reduce( ( a, g ) => a + g[ 1 ], 0 ) } ms in all` +
+		( gaps.length ? '   (at ms: ' + gaps.map( g => g[ 0 ] + ':' + g[ 1 ] ).join( '  ' ) + ')' : '' ) );
 	await b.close();
 } )().catch( e => { console.error( e ); process.exit( 1 ); } );

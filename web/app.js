@@ -230,6 +230,57 @@ const ADAPT = ( document.body.dataset.embed === '1' )
  * background compiles - are never slower than the fixed dial used to be. */
 const STEPS = [ 1, 0.90, 0.81, 0.73, 0.66, 0.60, 0.55, 0.50 ];
 const STEP0 = 3;
+/* ------------------------------------------------------- the device
+ * Owner, 2026-11-28: "check my gpu, cpu - is the quality looking at the
+ * device I am on? if my device sucks, open webgl". Three answers:
+ *
+ * NO WEBGPU (an older Safari or Firefox, an old Android): the page used to
+ * stop on an error. It runs on three's WebGL2 backend now, same scene, same
+ * materials (`?gl=1` forces it). That is a way IN, not a way to be faster:
+ * on the machine this was written on the same frame is 60 fps at 3.07 Mpx on
+ * WebGPU and 33 fps at 1.44 on WebGL, and the boot is 12 s against 1.3 - so
+ * a device that HAS WebGPU is never sent there.
+ *
+ * A WEAK DEVICE, guessed at boot (`deviceLook`): the WebGL fallback, a
+ * software adapter, <= 4 GB or <= 4 cores, a phone. It gets the `low` tier:
+ * a 2048 shadow map and sky, and three rungs under the ladder's floor.
+ *
+ * A WEAK DEVICE, MEASURED: the guess is only a head start - the ladder
+ * times every frame, and a page sitting on its floor and still missing
+ * (`FLOOR_MISSES`) gets the lower rungs whatever it claimed to be. Nothing
+ * here changes one pixel on a machine that holds the frame.
+ * `?tier=low|full` pins it; `window.__device()` says what was decided. */
+const LOW_STEPS = [ 0.44, 0.38, 0.33 ];
+const FLOOR_MISSES = 90;
+const DEVICE = { tier: 'full', why: [], backend: '', gpu: '', cores: navigator.hardwareConcurrency || 0,
+	memory: navigator.deviceMemory || 0, rungs: false, pinned: __q.get( 'tier' ) };
+let floorMiss = 0;
+function deviceRungs( why ) {
+	if ( DEVICE.rungs || DEVICE.pinned === 'full' ) return;
+	DEVICE.rungs = true;
+	DEVICE.why.push( why );
+	STEPS.push( ...LOW_STEPS );
+	console.info( 'device: lower densities unlocked (' + why + ')' );
+}
+async function deviceLook( forcedGL ) {
+	const why = [];
+	if ( forcedGL ) why.push( 'no WebGPU' );
+	else try {
+		// a second adapter object, only to read what it is; three keeps its own
+		const ad = await navigator.gpu.requestAdapter();
+		const info = ad && ad.info;
+		if ( info ) {
+			DEVICE.gpu = [ info.vendor, info.architecture, info.device, info.description ].filter( Boolean ).join( ' ' );
+			if ( info.isFallbackAdapter || ad.isFallbackAdapter || /swiftshader|llvmpipe|software|basic render/i.test( DEVICE.gpu ) ) why.push( 'software GPU' );
+		}
+	} catch ( e ) {}
+	if ( DEVICE.memory && DEVICE.memory <= 4 ) why.push( DEVICE.memory + ' GB' );
+	if ( DEVICE.cores && DEVICE.cores <= 4 ) why.push( DEVICE.cores + ' cores' );
+	if ( /Mobi|Android|iPhone|iPad/i.test( navigator.userAgent ) || ( navigator.maxTouchPoints > 1 && Math.min( screen.width, screen.height ) < 820 ) ) why.push( 'mobile' );
+	if ( DEVICE.pinned === 'low' ) why.push( 'pinned' );
+	if ( DEVICE.pinned === 'full' ) why.length = 0;
+	if ( why.length ) { DEVICE.tier = 'low'; deviceRungs( why.join( ', ' ) ); }
+}
 /* The occlusion is resolved at the full frame when the shot is still -
  * that is the frame held against the photograph - and at half of it while
  * the shot moves, where the temporal AA has motion to hide it under. */
@@ -629,7 +680,10 @@ function rate() {
 			}
 			prStep = aim; overRun = 0; missWin = 0; holdFor = 24;
 		}
+		// on the floor and still missing: this device needs the rungs under it
+		else if ( prStep === STEPS.length - 1 && ! warming && ! DEVICE.rungs && ++ floorMiss >= FLOOR_MISSES ) deviceRungs( 'measured' );
 	} else {
+		if ( floorMiss > 0 ) floorMiss --;
 		overRun = 0;
 		const mayRise = prStep > prCap || now > probeAt;
 		/* Sixty frames in a row with none of them over the ceiling is a
@@ -709,13 +763,14 @@ init().catch( ( e ) => {
 	console.error( e );
 	bootmsg.textContent = 'could not start';
 	booterr.innerHTML = ( navigator.gpu ? '' :
-		'This page renders with <b>WebGPU</b>. Use Chrome&nbsp;113+, Edge, or Safari&nbsp;18+ with WebGPU enabled.<br><br>' )
+		'This page needs <b>WebGPU</b> or <b>WebGL&nbsp;2</b>, and this browser gave it neither. Try a current Chrome, Edge or Safari.<br><br>' )
 		+ '<code style="font-size:11px;opacity:.75">' + String( e && e.message || e ) + '</code>';
 } );
 
 async function init() {
 
-	if ( ! navigator.gpu ) throw new Error( 'navigator.gpu is unavailable' );
+	const FORCE_GL = __q.get( 'gl' ) === '1' || ! navigator.gpu;
+	const looked = deviceLook( FORCE_GL );
 
 	step( 6, 'starting webgpu' );
 	/* `?ts=1` asks the backend for WebGPU timestamp queries, which is the only
@@ -724,7 +779,7 @@ async function init() {
 	 * default: a query pool per frame is not free. tools/gputime.cjs reads it. */
 	const TRACK_TS = new URLSearchParams( location.search ).get( 'ts' ) === '1';
 	renderer = new THREE.WebGPURenderer( { antialias: false, alpha: false,
-		trackTimestamp: TRACK_TS } );
+		trackTimestamp: TRACK_TS, forceWebGL: FORCE_GL } );
 	/* MEASUREMENT ONLY: ?nolight=1 turns the renderer's scene lighting off, so
 	 * every material's shader is built without its lighting chain. The picture
 	 * is wrong - that is not the point - it prices what the lighting costs in
@@ -741,6 +796,19 @@ async function init() {
 	renderer.library.addLight( SunLightNode, SunLight );
 	frameEl.insertBefore( renderer.domElement, frameEl.firstChild );
 	await renderer.init();
+	await looked;
+	/* three falls back by itself too, when there is a `navigator.gpu` and no
+	 * adapter behind it - ask the backend what it turned out to be. */
+	DEVICE.backend = renderer.backend.isWebGLBackend ? 'webgl2' : 'webgpu';
+	if ( DEVICE.backend === 'webgl2' && ! FORCE_GL && DEVICE.pinned !== 'full' ) { DEVICE.tier = 'low'; deviceRungs( 'no WebGPU adapter' ); }
+	if ( DEVICE.backend === 'webgl2' && ! DEVICE.gpu ) try {
+		const gl = renderer.backend.gl, ext = gl && gl.getExtension( 'WEBGL_debug_renderer_info' );
+		if ( ext ) DEVICE.gpu = gl.getParameter( ext.UNMASKED_RENDERER_WEBGL );
+	} catch ( e ) {}
+	window.__device = () => ( { ...DEVICE, why: DEVICE.why.slice(), steps: STEPS.slice() } );
+	console.info( 'device: ' + DEVICE.backend + ', ' + ( DEVICE.gpu || 'gpu unnamed' ) + ', ' + DEVICE.cores + ' cores, '
+		+ ( DEVICE.memory ? DEVICE.memory + ' GB' : 'memory unsaid' ) + ' -> ' + DEVICE.tier
+		+ ( DEVICE.why.length ? ' (' + DEVICE.why.join( '; ' ) + ')' : '' ) );
 
 	scene = new THREE.Scene();
 	clock = new THREE.Clock();
@@ -778,7 +846,7 @@ async function init() {
 	 * same, so a small device gets the small one. */
 	const BG_MODE = __q.get( 'bg' ) || 'tex';
 	const smallDevice = ( navigator.deviceMemory && navigator.deviceMemory <= 4 )
-		|| Math.min( innerWidth, innerHeight ) < 700;
+		|| Math.min( innerWidth, innerHeight ) < 700 || DEVICE.tier === 'low';
 	const BG_PX = + ( __q.get( 'bgpx' ) || ( smallDevice ? 2048 : 4096 ) );
 	let bgRT = null;
 	if ( BG_MODE === 'flat' ) scene.backgroundNode = vec3( 0.42, 0.52, 0.68 );
@@ -834,7 +902,9 @@ async function init() {
 	 * where 2048 put roughly one texel on every 20 cm and the balcony
 	 * soffits and window reveals came back as stairs. Quality here is
 	 * nearly free in a way that per-frame quality never is. */
-	sun.shadow.mapSize.set( SHADOW_PX, SHADOW_PX );
+	// a weak device (`deviceLook`) takes half the map unless `?shadow=` says otherwise
+	const shadowPx = DEVICE.tier === 'low' && ! __q.get( 'shadow' ) ? Math.min( SHADOW_PX, 2048 ) : SHADOW_PX;
+	sun.shadow.mapSize.set( shadowPx, shadowPx );
 	if ( sun.shadow.camera ) { sun.shadow.camera.near = 1; sun.shadow.camera.far = SHADOW_FAR; }
 	sun.shadow.bias = -0.00022;
 	sun.shadow.normalBias = 0.04;
@@ -3482,17 +3552,43 @@ function lvPart( name ) {
  * level is hidden again once built, for the walk's own gate (`bwReady`) to
  * show. `?bwasync=0` keeps the held compile, for an A/B. */
 const BW_ASYNC = __q.get( 'bwasync' ) !== '0';
+/* ...and behind the STREET the same way (owner, 2026-11-28: "so much lag on
+ * first loading after refresh"). The prewarm starts on the first pointer
+ * move, which is the first second of every visit, and through the held gate
+ * it was 2.2 s of undrawn frames in the first 2.3 s (one of 960 ms) - with
+ * the main thread blocked for 150 ms of it. So it was never the shader
+ * builds: it was the loop standing still while the GPU process compiled.
+ * On the street the storey is inside the building, behind its walls and its
+ * opaque glass, so it can be put in the frame to build exactly as on a walk.
+ * The floor view keeps the held gate: there a storey shown early would be
+ * seen. `?lvasync=0` restores the held compile, for an A/B. */
+const LV_ASYNC = __q.get( 'lvasync' ) !== '0';
+const LV_WARM_LOT = + ( __q.get( 'lvlot' ) || 2 );
+const lvLots = ( list, n = LV_WARM_LOT ) => { const out = []; for ( let i = 0; i < list.length; i += n ) out.push( list.slice( i, i + n ) ); return out; };
+const lvWarmLive = () => PIPES && ( ( bwOn && BW_ASYNC ) || ( LV_ASYNC && EMBED && ! bwOn && sceneNo === 1 ) );
 function lvWarmWalk( P, show, hide, mats, warmed ) {
 	const job = lvWarm.then( async () => {
 		const key = warmed === lvWarmed ? ( m ) => m : ( m ) => m.uuid;
 		if ( [ ...mats ].every( m => warmed.has( key( m ) ) ) ) return;
 		pipesGather();
 		P.warming = true;
-		show();
+		/* `show` may hand back what it showed, in lots: they then come into
+		 * the frame a lot at a time, a drawn frame apart. A shader's WGSL is
+		 * built on the main thread by the frame that first sees it - all of a
+		 * storey's furniture at once was one 340 ms frame, a lot of
+		 * `LV_WARM_LOT` is a frame nobody notices. */
+		const lots = show();
+		const drawn = async ( n ) => {
+			const r0 = __perf.rendered || 0;
+			for ( let i = 0; i < 240 && ( __perf.rendered || 0 ) < r0 + n; i ++ ) { invalidate( 2 ); await nextFrame(); }
+		};
+		if ( lots && lots.length ) {
+			for ( const lot of lots ) for ( const o of lot ) o.visible = false;
+			for ( const lot of lots ) { for ( const o of lot ) o.visible = true; await drawn( 1 ); }
+		}
 		shadowDirty();
-		const r0 = __perf.rendered || 0;
 		// two drawn frames: the beauty pass and the pre-pass both ask
-		for ( let i = 0; i < 240 && ( __perf.rendered || 0 ) < r0 + 2; i ++ ) { invalidate( 2 ); await nextFrame(); }
+		await drawn( 2 );
 		try { await pipesSettled(); } finally { P.warming = false; hide(); }
 		shadowDirty();
 		invalidate( 2 );
@@ -3502,11 +3598,15 @@ function lvWarmWalk( P, show, hide, mats, warmed ) {
 	return job;
 }
 function lvCompile( P ) {
-	if ( bwOn && BW_ASYNC && PIPES ) {
-		const mats = new Set( P.group.children.filter( o => o.isMesh && o !== P.cap ).map( o => o.material ) );
+	if ( lvWarmLive() ) {
+		// the street's warm builds the cap's ink too: the floor view draws it
+		const walk = bwOn;
+		const mats = new Set( P.group.children.filter( o => o.isMesh && ( ! walk || o !== P.cap ) ).map( o => o.material ) );
 		let capWas = false;
-		return lvWarmWalk( P, () => { if ( P.cap ) { capWas = P.cap.visible; P.cap.visible = false; } P.group.visible = true; },
-			() => { if ( P.state !== 'in' ) P.group.visible = false; if ( P.cap ) P.cap.visible = capWas; }, mats, lvWarmed );
+		return lvWarmWalk( P, () => { if ( P.cap && walk ) { capWas = P.cap.visible; P.cap.visible = false; } P.group.visible = true;
+				// behind the street, a mesh a frame; all of them were visible, and stay so
+				if ( ! walk ) return lvLots( P.group.children.filter( o => o.isMesh && o.visible ), 1 ); },
+			() => { if ( P.state !== 'in' ) P.group.visible = false; if ( P.cap && walk ) P.cap.visible = capWas; }, mats, lvWarmed );
 	}
 	const job = lvWarm.then( async () => {
 		const mats = new Set( P.group.children.filter( o => o.isMesh ).map( o => o.material ) );
@@ -5548,6 +5648,29 @@ function lvFurnCompile( P, F ) {
 			if ( ! ( bwOn && bwShown.has( P.name ) ) ) { F.walk( false ); F.all( 0 ); P.group.visible = gWas; }
 			if ( P.cap ) P.cap.visible = capWas;
 		}, mats, lvFurnWalked );
+	} );
+	/* Behind the street (`LV_ASYNC`): both variants, in the frame, the loop
+	 * running - one piece per shader and the welded lot, everything else of
+	 * the furniture hidden as in the held warm below. */
+	if ( lvWarmLive() ) return lvFurnWeld( F ).then( ( W ) => {
+		const mats = new Set( F.instanced.children.map( o => o.material ) );
+		let back = null;
+		return lvWarmWalk( P, () => {
+			const gWas = P.group.visible, wWas = W.visible;
+			const show = [ ...new Set( [ ...furnWarmSet( F.reps ), ...W.children ] ) ];
+			const kids = [ ...new Set( [ ...F.reps, ...W.children ] ) ], was = kids.map( o => o.visible );
+			for ( const o of kids ) o.visible = false;
+			const instBack = F.instHold ? F.instHold() : () => {};   // FURN_GRAPH
+			W.visible = true;
+			P.group.visible = true;
+			back = () => {
+				W.visible = wWas;
+				kids.forEach( ( o, i ) => { o.visible = was[ i ]; } );
+				instBack();
+				if ( P.state !== 'in' || ! ( lvOpen === P.name && sceneNo === 2 ) ) P.group.visible = gWas;
+			};
+			return lvLots( show );
+		}, () => { if ( back ) back(); }, mats, lvFurnWarmed );
 	} );
 	const job = lvWarm.then( async () => {
 		/* Both ways it is drawn - instanced in the floor view, welded on a
